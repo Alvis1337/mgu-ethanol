@@ -10,7 +10,11 @@ Unofficial: nothing here is made, endorsed or supported by BMW AG. Install at yo
 
 - Big E% number and a 0-100 bar, with a target band marked (default E30-E50, changeable in Settings).
 - Status: in / above / below the band. Min and max since reset. 20-minute trend.
-- A details line: which identifier answered and its raw bytes, or why nothing did.
+- A details line: which identifier answered and its raw bytes, or why nothing did. If the DME stops answering
+  (asleep, engine off) it is asked again every 10 seconds, so the number appears once the engine runs.
+- **Fill-up calculator**: how much E85 and how much 93 to add to fill the tank at a target E%.
+- **Debug page**: fires a list of read-only requests at the DME and shows what each one answered, to find out
+  what your car's DME supports.
 - **Read only.** It asks the engine unit (DME, address 0x12) with UDS `22` and OBD `01` reads through the kit's
   read-only link (`kit/runtime/readonly-diag.js`), which refuses every other service. It never writes, codes or
   clears anything.
@@ -21,11 +25,40 @@ Tried in order, the first plausible answer wins (`config` in `apps/alvis_ethanol
 
 1. DID `F452` = standard OBD PID 0x52 (ethanol fuel %), through UDS 22; raw 0..255 = 0..100 %.
 2. OBD service 01, PID `52`.
+3. DID `550D` = the BMW DME's `PROZENT_ALK_KRST` ("percent alcohol in fuel", DME8FF_R: one byte, 0..255 = 0..100 %).
 
-Whether a DME fills PID 0x52 on a given tune is not known in advance. If neither answers, the screen says NO DATA and
-the details line shows the refusal codes. `config.probe` lists identifiers that are only *read* and whose raw bytes are
-shown on the details line (default: DID `550D`, which the upstream Live Data app lists as "Ethanol in the fuel"); use it
-to work out the scaling of a BMW-specific identifier, then add it to `config.candidates`.
+Which of them a DME answers on a given tune is not known in advance: run the Debug page to see. Once you know,
+**Settings -> Ethanol source** pins one of them instead of taking the first that answers. If none answers, the screen
+says NO DATA and the details line shows the refusal codes. `config.probe` lists extra identifiers that are only *read*
+(raw bytes on the details line and the Debug page); use it to work out the scaling of another BMW-specific identifier,
+then add it to `config.candidates`.
+
+## Fill-up calculator
+
+**Fill-up calculator** on the main screen. Set the target with **Target -5 / +5** (or Settings -> Fill-up target);
+it shows how much E85 and how much 93 to add to fill the tank at that E%, and the lowest and highest E% a full tank can
+reach from where you are (all 93 / all E85).
+
+It works from:
+
+- **Ethanol now**: the live reading, else Settings -> Ethanol now, when not read.
+- **Fuel in the tank**: read from the DME (`583B`, litres; else OBD PID `2F`, % of the tank), or set by hand in
+  Settings -> Fuel in the tank now (1/8 steps).
+- **Tank size**: Settings (default 59 l / 15.6 gal).
+- **E85 at the pump is really** (default 85; summer / winter E85 is often 70-83 %) and **93 at the pump has**
+  (default 10 %).
+
+Amounts are in US gallons or litres (Settings -> Fill-up amounts in). Blending is by volume, so the answer is only as
+good as the inputs: pump E85 varies, and a test kit or the car's own reading after a fill-up tells you what you got.
+
+## Debug page
+
+**Debug** on the main screen, then **Run all requests**, with the engine running (or at least the ignition on). It asks
+the DME for the VIN and its type (SGBD index), the three ethanol identifiers, fuel type, tank level, a few engine values
+and which OBD PIDs it claims to support, then which units are on the bus (22 F150 to all). Each row shows the request,
+what it reads, and the answer: green = a value (with the raw bytes), amber = refused (NRC), grey = no reply. The run
+takes up to about a minute and fits on one page; take a photo of it. Every row is also written to the app's log.
+Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
 
 ## Install (MGU Store)
 
@@ -48,7 +81,7 @@ through `guard()` in `main.js` (the platform uninstalls an app that crashes).
 
 | Path | |
 | --- | --- |
-| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screen), `reader.js` (the DME read), `icon.png` |
+| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `icon.png` |
 | `kit/` | the MGU App Kit from [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT, see `kit/LICENSE`), vendored as the Store builds from it |
 | `test/` | unit tests (`test/run.js`) |
 | `mgu-repo.json` | what the Store reads |
