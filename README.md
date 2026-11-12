@@ -91,7 +91,12 @@ gets lost:
 6. **Trace**: every request of the run, the transport's verdict on it and every response, with milliseconds from
    the run's start, so a reject (which carries no address) can be tied to the request it answers. The car rows also
    show the vehicle state (parked / ignition on / ready), which some units gate their answers on.
-7. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
+7. **Ext**: the unit's catalog lists a second request method, `sendTasuRequestExt`, next to the `sendTasuRequest`
+   every kit app uses. The page shows its parameters (and the transport's whole definition, also in the log), and,
+   when the installer gave the app the method, sends three READS through it after a quiet spell: the body module's
+   VIN (which answers the usual method: does the call itself work?), then the DSC's and the DME's type. Each request
+   passes readonly-diag's check first.
+8. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
    and from which unit, errors, rejects, and the raw bytes of the last ones (`tap.js` counts them without changing
    anything; the kit drops whatever is not a reply silently).
 

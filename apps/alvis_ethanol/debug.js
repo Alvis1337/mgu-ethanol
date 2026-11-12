@@ -26,7 +26,8 @@ const fs = require('fs');
 const path = require('path');
 const { hex, NRC } = require('./kit/diag');
 const { withAlpha } = require('./kit/canvas');
-const { tally } = require('./tap');
+const { tally, verdictOf } = require('./tap');
+const { check } = require('./kit/readonly-diag');
 
 const pct = (b) => (b * 100 / 255).toFixed(1) + ' %';
 const ascii = (bytes) => bytes.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
@@ -197,6 +198,12 @@ class Debug {
         this.settleMs = opts && opts.settleMs != null ? opts.settleMs : 5000;          // quiet before the first request
         this.ecProbes = (opts && opts.ecProbes) || EC_PROBES;
         this.ecGapMs = opts && opts.ecGapMs != null ? opts.ecGapMs : null;            // tests: no 4 s gaps
+        // sendTasuRequestExt test: { call(params) -> verdict, subscribe(event) } (main.js), its wait for an answer
+        this.ext = (opts && opts.ext) || null;
+        this.extWaitMs = (opts && opts.extWaitMs) || 9000;
+        this.extParams = null;              // the Ext method's parameter names, from the unit's catalog
+        // more places the other apps may be (upstream's README: /var/opt/public/oap/oap_<uid>/)
+        this.appsDirs = (opts && opts.appsDirs) || [this.appsDir, '/var/opt/public/oap'];
         this.car = (opts && opts.car) || (() => ({}));
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
@@ -244,7 +251,8 @@ class Debug {
         try { m = missing ? JSON.parse(missing) : {}; } catch (e) { m = null; }
         const keys = m ? Object.keys(m) : [];
         rows.push({ label: 'Left out at install', req: 'build',
-            state: m === null ? 'error' : keys.some((k) => /Tasu/i.test(k)) ? 'error' : keys.length ? 'odd' : 'ok',
+            // red only for the parts every request needs (the bare interface, sendTasuRequest, sendTasuResponse), not the Ext ones
+            state: m === null ? 'error' : keys.some((k) => /Tasu/i.test(k) && (!/:/.test(k) || /sendTasu(Request|Response)(?!Ext)\b/.test(k))) ? 'error' : keys.length ? 'odd' : 'ok',
             text: m === null ? 'unreadable: ' + missing.slice(0, 60) : keys.length ? keys.join(' | ') : 'nothing' });
         let man = null;
         try { man = JSON.parse(readText(this.manifestFile)); } catch (e) { man = null; }
@@ -307,6 +315,32 @@ class Debug {
             ' | instances ' + (Object.keys(ids[TASU] || {}).join(' ') || '-') : 'not listed', t ? 'info' : 'error');
         const diag = Object.keys(ifs).filter((k) => k !== TASU && /tasu|diag|uds|obd|tester/i.test(k));
         push('Other diagnostic interfaces', diag.length ? diag.map(short).join(', ') : 'none');
+        // what they offer: method / event names of each, and the transport's whole definition (wrapped; all in the log)
+        diag.forEach((k) => {
+            const d = ifs[k] || {};
+            push('  ' + short(k), 'methods ' + (names(d.methods).join(' ') || '-') + ' | events ' + (names(d.events).join(' ') || '-') + ' | fields ' + (names(d.fields).join(' ') || '-'));
+            this.log.info('debug catalog ' + k + ': ' + JSON.stringify(d).slice(0, 6000));
+        });
+        if (t) {
+            const ext = (Array.isArray(t.methods) ? t.methods.filter((m) => m && m.name === 'sendTasuRequestExt')[0] : (t.methods || {}).sendTasuRequestExt) || null;
+            if (ext) {
+                const found = [];
+                const grab = (v, depth) => {
+                    if (!v || typeof v !== 'object' || depth > 10) return;
+                    Object.keys(v).forEach((kk) => {
+                        if (kk === 'name' && typeof v[kk] === 'string' && v[kk] !== 'sendTasuRequestExt' && found.indexOf(v[kk]) < 0) found.push(v[kk]);
+                        grab(v[kk], depth + 1);
+                    });
+                };
+                grab(ext, 0);
+                if (!Array.isArray(t.methods) && !found.length) Object.keys(ext).forEach((kk) => found.push(kk));
+                this.extParams = found;
+                push('Ext request takes', found.join(', ') || '(no names found)');
+            }
+            const def = JSON.stringify(t).replace(/"/g, '');
+            this.log.info('debug catalog TASU definition: ' + JSON.stringify(t));
+            for (let i = 0, n = 0; i < def.length && n < 24; i += 70, n++) push('  TASU def ' + (n + 1), def.slice(i, i + 70));
+        }
         // names / texts that look like an ethanol or fuel quality signal, anywhere in the catalog
         const hits = [];
         const walk = (v, at, depth) => {
@@ -331,14 +365,22 @@ class Debug {
      */
     otherLogRows() {
         const rows = [], push = (label, text, state) => rows.push({ group: 'Other apps', label, req: 'log', state: state || 'info', text });
-        let dirs;
-        try { dirs = fs.readdirSync(this.appsDir).filter((d) => /^oap_/.test(d)); } catch (e) {
-            push('Other apps', 'cannot list ' + this.appsDir + ': ' + (e && e.code || e), 'error');
+        let dirs = [];
+        const listed = [];
+        this.appsDirs.filter((b, i, a) => a.indexOf(b) === i).forEach((base) => {
+            try {
+                const ds = fs.readdirSync(base).filter((d) => /^oap_/.test(d));
+                listed.push(base + ' (' + ds.length + ')');
+                dirs = dirs.concat(ds.map((d) => path.join(base, d)));
+            } catch (e) { listed.push(base + ' (' + (e && e.code || e) + ')'); }
+        });
+        if (!listed.some((l) => !/\((E[A-Z]+|[^0-9)]+)\)$/.test(l))) {
+            push('Other apps', 'cannot list ' + listed.join(', '), 'error');
             return rows;
         }
         OTHER_LOGS.forEach((o) => {
             let file = null;
-            dirs.forEach((d) => { const f = path.join(this.appsDir, d, 'data', o[0] + '.log'); try { fs.accessSync(f); file = f; } catch (e) { /* not this one */ } });
+            dirs.forEach((d) => { const f = path.join(d, 'data', o[0] + '.log'); try { fs.accessSync(f); file = f; } catch (e) { /* not this one */ } });
             if (!file) return;
             let text = null, why = '';
             try {
@@ -352,7 +394,7 @@ class Debug {
             push(o[1], lines.length + ' matching lines in the last ' + Math.round(text.length / 1024) + ' KB of its log', lines.length ? 'ok' : 'none');
             lines.slice(-6).forEach((l) => { push('  ' + o[1], shortLine(l)); this.log.info('debug ' + o[1] + ' log: ' + l.slice(0, 400)); });
         });
-        if (!rows.length) push('Other apps', 'no Engine Config / Live Data / M Vitals / Fault Scanner log found in ' + dirs.length + ' app folders', 'none');
+        if (!rows.length) push('Other apps', 'no app log found: ' + listed.join(', '), 'none');
         return rows;
     }
 
@@ -365,6 +407,55 @@ class Debug {
             state: e.dir === '<' ? (/^from/.test(e.text) ? 'ok' : 'odd') : 'info', text: e.text }));
         mine.forEach((e) => this.log.info('debug trace +' + (e.at - this.startedAt) + ' ' + e.dir + ' ' + e.text));
         return rows.length > 120 ? rows.slice(0, 60).concat([{ group: 'Trace', label: '...', req: '', state: 'info', text: (rows.length - 120) + ' more in the log' }], rows.slice(-60)) : rows;
+    }
+
+    /**
+     * sendTasuRequestExt, the transport's second request method (in the catalog next to the kit's sendTasuRequest), with
+     * READS only: the body module first (it answers sendTasuRequest: shows whether the call itself works), then the DSC
+     * and the DME. Sent as sendTasuRequest's fields, and, if the call is refused for its fields, once more with the
+     * Ext method's other parameters (from the catalog) set to 0. Every request passes readonly-diag's check first.
+     */
+    async extRows() {
+        const rows = [], push = (label, text, state, req) => { const r = { group: 'Ext', label, req: req || 'Ext', state: state || 'info', text }; rows.push(r); this.rows.push(r); this.log.info('debug Ext ' + label + ': ' + text); return r; };
+        if (!this.ext) { push('Ext request', 'not set up', 'none'); return rows; }
+        const cfg = readText(path.join(this.ifaceDir, TASU.replace(/\./g, '_') + '.json')) || readText(path.join(this.ifaceDir2, TASU.replace(/\./g, '_') + '.json'));
+        if (!cfg || !/sendTasuRequestExt/.test(cfg)) { push('Ext request', 'not in this app\'s interface config (the installer left it out, or no config)', 'none'); return rows; }
+        if (/sendTasuResponseExt/.test(cfg) && this.ext.subscribe) {
+            try { await this.ext.subscribe('sendTasuResponseExt'); push('Ext response event', 'subscribed'); } catch (e) { push('Ext response event', 'subscribe failed: ' + (e && e.message || e), 'error'); }
+        }
+        const base = ['sourceAddress', 'targetAddress', 'serviceID', 'subroutineID', 'udsDataLength', 'udsData', 'deadlockTime'];
+        const extra = (this.extParams || []).filter((n) => base.indexOf(n) < 0);
+        const targets = [[0x40, [0xF1, 0x90], 'Body BDC (40): VIN'], [0x29, [0xF1, 0x50], 'DSC (29): type'], [0x12, [0xF1, 0x50], 'DME (12): type']];
+        if (this.settleMs) await sleep(Math.max(this.settleMs, 8000));          // the transport free of the run's last request
+        for (const tg of targets) {
+            const ecu = tg[0], data = tg[1];
+            try { check(ecu, 0x22, data, false); } catch (e) { push(tg[2], 'blocked: ' + e.message, 'error'); continue; }
+            const params = { sourceAddress: 0xF2, targetAddress: ecu, serviceID: 0x22, subroutineID: 0, udsDataLength: data.length, udsData: Buffer.from(data), deadlockTime: 0 };
+            const tries = [['', params]];
+            if (extra.length) { const p2 = Object.assign({}, params); extra.forEach((n) => { p2[n] = 0; }); tries.push([' +' + extra.join('/') + '=0', p2]); }
+            for (const tr of tries) {
+                const seq0 = this.tap ? this.tap.responses : 0, t0 = Date.now();
+                let verdict = null, err = null;
+                for (let k = 0; k < 12; k++) {             // busy: again every second, as patient.js
+                    try { verdict = verdictOf(await this.ext.call(tr[1])); err = null; } catch (e) { err = String(e && e.message || e); verdict = null; }
+                    if (!(verdict && /TEMPORARILY_NOT_ACCEPTED|BUSY/i.test(verdict))) break;
+                    await sleep(1000);
+                }
+                if (err) { push(tg[2] + tr[0], 'call failed: ' + err, 'error', '22 ' + data.map(hex).join('') + ' @' + hex(ecu)); continue; }
+                // the answer: a frame from that unit, or a reject, within extWaitMs
+                let heard = [];
+                while (Date.now() - t0 < this.extWaitMs) {
+                    heard = this.tapSince ? this.tapSince(seq0) : [];
+                    if (heard.some((h) => h.kind === 'from ' + hex(ecu) || /^rejected|^error/.test(h.kind))) break;
+                    await sleep(200);
+                }
+                const mine = heard.filter((h) => h.kind === 'from ' + hex(ecu))[0], other = heard[0];
+                push(tg[2] + tr[0], 'verdict ' + verdict + ' | ' + (mine ? 'ANSWER ' + mine.bytes : other ? other.kind + ': ' + other.bytes : 'nothing in ' + Math.round(this.extWaitMs / 1000) + ' s'),
+                    mine ? 'ok' : other ? 'odd' : 'none', '22 ' + data.map(hex).join('') + ' @' + hex(ecu));
+                break;          // the call went through: no need for the second form
+            }
+        }
+        return rows;
     }
 
     /** What the transport said since the app started (tap.js), as rows. */
@@ -498,6 +589,7 @@ class Debug {
                     this.log.info('debug: ' + who + ' silent ' + silent[ecu] + ' times in a row, ' + left + ' requests skipped');
                 }
             }
+            if (this.ext) { this.extRunning = true; await this.extRows(); this.extRunning = false; }
             const end = this.statsRow();
             this.rows.push(end);
             this.log.info('debug link: ' + this.linkRow().text + ' | ' + end.text);
@@ -530,7 +622,7 @@ function drawDebug(cv, t, dbg, pageNo) {
     const W = cv.w;
     const rows = dbg.rows.length ? dbg.rows : [dbg.linkRow()];
     const perPage = PER_COL * 2, pages = Math.max(1, Math.ceil(rows.length / perPage)), page = (pageNo || 0) % pages;
-    const head = dbg.settling ? 'Letting the link go quiet (5 s) ...' : dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total + ' ...'
+    const head = dbg.settling ? 'Letting the link go quiet (5 s) ...' : dbg.extRunning ? 'Trying sendTasuRequestExt (reads only) ...' : dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total + ' ...'
         : dbg.endedAt ? 'Done in ' + Math.round((dbg.endedAt - dbg.startedAt) / 1000) + ' s. Take a photo of each page.'
             : 'Start the engine, then press Run all requests. Read-only: nothing is written.';
     fitText(cv, head, 24, 74, 20, dbg.running ? t.accent : t.text, W - 260, { font: 'bold' });

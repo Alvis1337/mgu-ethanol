@@ -86,7 +86,20 @@ mgu.run({
                 if (typeof l === 'number' && l >= 0 && l < 255) { car.tankL = l; car.tankAt = Date.now(); }
             },
         }, log).then((r) => { if (r.error) log.warn('fuel level signal: ' + r.error); }).catch((e) => log.warn('fuel level signal: ' + e));
-        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car });
+        // the Debug page's sendTasuRequestExt test (reads only: debug.js checks each request with readonly-diag's check)
+        const ext = {
+            call(params) {
+                if (!tap.proxy) return Promise.reject(new Error('no transport proxy yet'));
+                tap.trace('>', 'Ext to ' + (params.targetAddress & 0xFF).toString(16).toUpperCase() + ': 22 ' + Array.prototype.map.call(params.udsData, (b) => (b < 16 ? '0' : '') + b.toString(16).toUpperCase()).join(' '));
+                return ctx.signals.call(tap.proxy, 'sendTasuRequestExt', params, 8000)
+                    .then((v) => { tap.trace('=', 'Ext ' + JSON.stringify(v)); return v; }, (e) => { tap.trace('=', 'Ext call failed: ' + (e && e.message || e)); throw e; });
+            },
+            subscribe(name) {
+                if (!tap.proxy) return Promise.reject(new Error('no transport proxy yet'));
+                return ctx.signals.on(tap.proxy, name, (v) => { tap.trace('<', name + ' ' + JSON.stringify(v).slice(0, 200)); tap.hear(v); }, log);
+            },
+        };
+        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car, ext });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);

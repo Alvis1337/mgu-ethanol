@@ -13,10 +13,13 @@
  *   tap.stats  // { requests, verdicts: { NO_ERROR: 27 }, responses, frames: { '12': 3 }, errors, rejects, short, last,
  *              //   subscribed: 'not yet' | 'yes' | 'failed: ...', recent: [{ seq, at, kind, bytes }] }
  *   tap.since(seq)  // the responses heard after response number seq (the last 32 are kept)
+ *   tap.proxy       // the transport's proxy, once the kit made it (for the Debug page's sendTasuRequestExt test)
+ *   tap.hear(v)     // count / trace a response that came another way (an Ext response event)
  *   tap.stats.trace // [{ at, dir: '>' | '=' | '<', text }]: each request, the transport's verdict on it and each
  *                   // response, in order with their times (the last 400), to tie a reject to its request
  */
 const REQUEST = 'sendTasuRequest', RESPONSE = 'sendTasuResponse';
+const TASU = 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu';
 
 const hex = (n) => (n < 16 ? '0' : '') + n.toString(16).toUpperCase();
 
@@ -63,7 +66,13 @@ function tapSignals(signals, opts) {
         trace('<', kind + ': ' + seen.bytes);
     }
 
+    const out = { stats, proxy: null };
     const tapped = Object.assign({}, signals, {
+        proxy(iface, instance) {
+            const r = signals.proxy(iface, instance);
+            if (iface === TASU) Promise.resolve(r).then((px) => { if (!out.proxy) out.proxy = px; }, () => {});
+            return r;
+        },
         call(p, method, params, timeoutMs) {
             const r = signals.call(p, method, params, timeoutMs);
             if (method !== REQUEST) return r;
@@ -85,8 +94,11 @@ function tapSignals(signals, opts) {
             return r;
         },
     });
-    const since = (seq) => stats.recent.filter((x) => x.seq > seq);
-    return { signals: tapped, stats, since };
+    out.signals = tapped;
+    out.since = (seq) => stats.recent.filter((x) => x.seq > seq);
+    out.hear = (v) => { try { see(v); } catch (e) { /* counting only */ } };
+    out.trace = trace;
+    return out;
 }
 
 /** "NO_ERROR 27, X 2" (or none) */

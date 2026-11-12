@@ -26,7 +26,7 @@ module.exports = [
         assert.strictEqual(tap.stats.requests, 1);
         assert.deepStrictEqual(tap.stats.verdicts, { NO_ERROR: 1 });
         assert.strictEqual(tap.stats.firstVerdict, '{"TasuErrorEnum":"NO_ERROR"}');
-        assert.strictEqual(tap.signals.proxy, s.proxy);
+        assert.deepStrictEqual(await tap.signals.proxy('x', '1'), await s.proxy('x', '1'), 'proxy() passes through');
         await tap.signals.onAvailable(); assert.strictEqual(s.other, 1);
     }],
     ['responses reach the kit unchanged; frames, errors, rejects and short frames are counted', async () => {
@@ -104,5 +104,17 @@ module.exports = [
             '< from 29: 00 00 00 00 00 00 29 00 00 62 F1 50 0F 28 50',
         ]);
         assert.ok(tap.stats.trace.every((e) => typeof e.at === 'number'));
+    }],
+    ['proxy: the transport proxy kept for the Ext test; other proxies passed through', async () => {
+        const s = fakeSignals();
+        s.proxy = (iface) => Promise.resolve({ iface });
+        const tap = tapSignals(s);
+        await tap.signals.proxy('de.bmw.infotainment.vehicle.CDS', '1');
+        assert.strictEqual(tap.proxy, null);
+        const px = await tap.signals.proxy('com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu', 'SystemFunctionsInternalTasuInst1');
+        await Promise.resolve();
+        assert.strictEqual(tap.proxy, px);
+        tap.hear(frame(0x29, [0x62, 0xF1, 0x50, 1, 2, 3]));
+        assert.deepStrictEqual(tap.stats.frames, { 29: 1 });
     }],
 ];

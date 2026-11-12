@@ -294,7 +294,7 @@ module.exports = [
         assert.strictEqual(rows[2].text, '20:30:06 identified: DSC 0F2850 DSC_G30N, supported true, rpm 702');
         assert.strictEqual(logged.length, 2);
         const none = new Debug(fakeLink({}), quiet, { appsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ethanol-noapps-')) }).otherLogRows();
-        assert.ok(/no Engine Config/.test(none[0].text));
+        assert.ok(/^no app log found: .*ethanol-noapps-.* \(0\)/.test(none[0].text), none[0].text);
         const gone = new Debug(fakeLink({}), quiet, { appsDir: '/nonexistent/apps' }).otherLogRows();
         assert.ok(/^cannot list/.test(gone[0].text));
         assert.strictEqual(shortLine('2026-11-12T20:30:07.000Z WARN plain text'), '20:30:07 plain text');
@@ -335,5 +335,49 @@ module.exports = [
         assert.strictEqual(tr.filter((r) => r.state === 'odd').length > 0, true, 'rejects marked');
         const ten = new Debug(fakeLink({}), quiet, { car: () => ({ condition: 10 }) }).carRows();
         assert.strictEqual(ten[2].text, '10 = FAHREN: ready / engine running');
+    }],
+    ['Ext: the method from the catalog, reads to BDC / DSC / DME through it, the answer or the reject told', async () => {
+        const dirs = layout({
+            [TASU_CFG]: '{"methods":{"sendTasuRequest":{},"sendTasuRequestExt":{}},"events":{"sendTasuResponse":{},"sendTasuResponseExt":{}}}',
+            'kit/missing-interfaces.json': JSON.stringify({ 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu: sendTasuResponseExt': 'these signals' }),
+        });
+        const cat = path.join(dirs.ifaceDir, '..', 'catalog.json');
+        fs.writeFileSync(cat, JSON.stringify({ interfaces: { 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu': {
+            methods: [{ name: 'sendTasuRequest', in: [{ name: 'targetAddress' }] }, { name: 'sendTasuRequestExt', in: [{ name: 'targetAddress' }, { name: 'udsData' }, { name: 'busChannel' }] }],
+            events: [{ name: 'sendTasuResponse' }] } }, instanceIDs: {} }));
+        const tap = { responses: 0, subscribed: 'yes', requests: 0, verdicts: {}, callErrors: {}, frames: {}, errors: {}, rejects: {}, short: 0, last: [], trace: [] };
+        const heard = [];
+        const calls = [], subs = [];
+        const ext = {
+            call(p) {
+                calls.push(p);
+                if (!('busChannel' in p)) return Promise.reject(new Error('missing busChannel'));
+                tap.responses++;
+                heard.push(p.targetAddress === 0x40 ? { seq: tap.responses, kind: 'from 40', bytes: 'F0 F2 71 01 0F 0B 40 00 14 62 F1 90' } : { seq: tap.responses, kind: 'rejected 25', bytes: 'F0 F2 7F 31 25' });
+                return Promise.resolve({ TasuErrorEnum: 'REQUEST_PENDING' });
+            },
+            subscribe(n) { subs.push(n); return Promise.resolve(); },
+        };
+        const d = new Debug(fakeLink({}, null, true), quiet, Object.assign({ tap, tapSince: (n) => heard.filter((x) => x.seq > n), ext, catalogFile: cat, extWaitMs: 300 }, dirs));
+        const rows = await d.run();
+        assert.strictEqual(rows.filter((r) => r.label === 'Left out at install')[0].state, 'odd', 'an Ext part left out is not red');
+        assert.strictEqual(rows.filter((r) => r.label === 'Ext request takes')[0].text, 'targetAddress, udsData, busChannel');
+        assert.deepStrictEqual(subs, ['sendTasuResponseExt']);
+        const ex = rows.filter((r) => r.group === 'Ext' && /@/.test(r.req));
+        assert.ok(/call failed: missing busChannel/.test(ex[0].text), ex[0].text);
+        assert.ok(/verdict REQUEST_PENDING \| ANSWER F0 F2 71 01 0F 0B 40/.test(ex[1].text), ex[1].text);
+        assert.strictEqual(ex[1].state, 'ok');
+        assert.ok(/rejected 25/.test(ex[ex.length - 1].text) && ex[ex.length - 1].state === 'odd');
+        assert.ok(calls.every((p) => p.serviceID === 0x22 && p.udsData.length === 2), 'reads only');
+        assert.deepStrictEqual(calls.filter((p) => 'busChannel' in p).map((p) => p.targetAddress), [0x40, 0x29, 0x12]);
+        assert.ok(rows.some((r) => /^  TASU def 1$/.test(r.label)), 'the definition is shown');
+    }],
+    ['Ext: not in the interface config, or no adapter: said so, nothing sent', async () => {
+        const dirs = layout({ [TASU_CFG]: '{"methods":{"sendTasuRequest":{}}}' });
+        let sent = 0;
+        const ext = { call() { sent++; return Promise.resolve({}); } };
+        const rows = await new Debug(fakeLink({}, null, true), quiet, Object.assign({ ext, catalogFile: '/nonexistent' }, dirs)).run();
+        assert.strictEqual(sent, 0);
+        assert.ok(/not in this app's interface config/.test(rows.filter((r) => r.group === 'Ext')[0].text));
     }],
 ];
