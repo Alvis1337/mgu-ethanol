@@ -336,40 +336,58 @@ module.exports = [
         const ten = new Debug(fakeLink({}), quiet, { car: () => ({ condition: 10 }) }).carRows();
         assert.strictEqual(ten[2].text, '10 = FAHREN: ready / engine running');
     }],
-    ['Ext: the method from the catalog, reads to BDC / DSC / DME through it, the answer or the reject told', async () => {
+    ['Ext: its 8 inputs from the catalog (as on the car), reads to BDC / DSC / DME, the TASU fields read', async () => {
         const dirs = layout({
             [TASU_CFG]: '{"methods":{"sendTasuRequest":{},"sendTasuRequestExt":{}},"events":{"sendTasuResponse":{},"sendTasuResponseExt":{}}}',
-            'kit/missing-interfaces.json': JSON.stringify({ 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu: sendTasuResponseExt': 'these signals' }),
+            'kit/missing-interfaces.json': JSON.stringify({ 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu: sendTasuResponseExt, tasuExclusiveMode': 'these signals' }),
         });
         const cat = path.join(dirs.ifaceDir, '..', 'catalog.json');
-        fs.writeFileSync(cat, JSON.stringify({ interfaces: { 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu': {
-            methods: [{ name: 'sendTasuRequest', in: [{ name: 'targetAddress' }] }, { name: 'sendTasuRequestExt', in: [{ name: 'targetAddress' }, { name: 'udsData' }, { name: 'busChannel' }] }],
-            events: [{ name: 'sendTasuResponse' }] } }, instanceIDs: {} }));
+        const T = 'com.harman.infotainment.systemfunctions.tasu.TasuTypes.';
+        fs.writeFileSync(cat, JSON.stringify({ interfaces: {
+            'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu': {
+                methods: { sendTasuRequest: { inputs: [] }, sendTasuRequestExt: { inputs: [
+                    { dataRef: 'UInt8', name: 'sourceAddress' }, { dataRef: 'UInt8', name: 'targetAddress' }, { dataRef: 'UInt8', name: 'serviceID' },
+                    { dataRef: 'UInt8', name: 'subroutineID' }, { dataRef: 'UInt16', name: 'udsDataLength' }, { dataRef: 'ByteBuffer', name: 'udsData' },
+                    { dataRef: T + 'TimeoutType', name: 'deadlockTime' }, { dataRef: 'ByteBuffer', name: 'identifier' }],
+                    methodId: 3, outputs: [{ dataRef: T + 'TasuErrorEnum', name: 'TasuErrorEnum' }] } },
+                events: { sendTasuResponse: {} }, fields: { tasuExclusiveMode: { getter: { id: 2 } } } },
+            'de.bmw.diag.TasuExclusiveMode': { methods: { requestTasuExclusiveMode: {} } },
+        }, instanceIDs: { 'de.bmw.diag.TasuExclusiveMode': { 1: 1 } } }));
         const tap = { responses: 0, subscribed: 'yes', requests: 0, verdicts: {}, callErrors: {}, frames: {}, errors: {}, rejects: {}, short: 0, last: [], trace: [] };
-        const heard = [];
-        const calls = [], subs = [];
+        const heard = [], calls = [], subs = [], got = [];
         const ext = {
             call(p) {
                 calls.push(p);
-                if (!('busChannel' in p)) return Promise.reject(new Error('missing busChannel'));
+                if (Object.keys(p).length !== 8) return Promise.reject(new Error('Object contains ' + Object.keys(p).length + ' members when 8 expected'));
                 tap.responses++;
                 heard.push(p.targetAddress === 0x40 ? { seq: tap.responses, kind: 'from 40', bytes: 'F0 F2 71 01 0F 0B 40 00 14 62 F1 90' } : { seq: tap.responses, kind: 'rejected 25', bytes: 'F0 F2 7F 31 25' });
                 return Promise.resolve({ TasuErrorEnum: 'REQUEST_PENDING' });
             },
             subscribe(n) { subs.push(n); return Promise.resolve(); },
+            getField(n) { got.push(n); return Promise.resolve({ exclusive: false }); },
         };
         const d = new Debug(fakeLink({}, null, true), quiet, Object.assign({ tap, tapSince: (n) => heard.filter((x) => x.seq > n), ext, catalogFile: cat, extWaitMs: 300 }, dirs));
         const rows = await d.run();
-        assert.strictEqual(rows.filter((r) => r.label === 'Left out at install')[0].state, 'odd', 'an Ext part left out is not red');
-        assert.strictEqual(rows.filter((r) => r.label === 'Ext request takes')[0].text, 'targetAddress, udsData, busChannel');
+        assert.strictEqual(rows.filter((r) => r.label === 'Left out at install')[0].state, 'odd', 'Ext parts / a guessed field left out are not red');
+        assert.strictEqual(rows.filter((r) => r.label === 'Ext request takes')[0].text,
+            'sourceAddress:UInt8, targetAddress:UInt8, serviceID:UInt8, subroutineID:UInt8, udsDataLength:UInt16, udsData:ByteBuffer, deadlockTime:TimeoutType, identifier:ByteBuffer');
+        assert.strictEqual(rows.filter((r) => r.label === 'TASU fields')[0].text, 'tasuExclusiveMode');
+        assert.ok(rows.some((r) => r.label === '  full name' && /^de\.bmw\.diag\.TasuExclusiveMode \| instances 1$/.test(r.text)));
+        assert.deepStrictEqual(got, ['tasuExclusiveMode']);
+        assert.strictEqual(rows.filter((r) => r.label === 'TASU field tasuExclusiveMode')[0].text, '{"exclusive":false}');
         assert.deepStrictEqual(subs, ['sendTasuResponseExt']);
+        assert.strictEqual(calls.length, 3, 'one call per unit: the 8 inputs at once');
+        assert.deepStrictEqual(calls.map((p) => p.targetAddress), [0x40, 0x29, 0x12]);
+        calls.forEach((p) => {
+            assert.strictEqual(p.serviceID, 0x22, 'reads only');
+            assert.strictEqual(p.udsData.length, 2);
+            assert.ok(Buffer.isBuffer(p.identifier) && p.identifier.length === 4);
+            assert.strictEqual(p.deadlockTime, 0);
+        });
         const ex = rows.filter((r) => r.group === 'Ext' && /@/.test(r.req));
-        assert.ok(/call failed: missing busChannel/.test(ex[0].text), ex[0].text);
-        assert.ok(/verdict REQUEST_PENDING \| ANSWER F0 F2 71 01 0F 0B 40/.test(ex[1].text), ex[1].text);
-        assert.strictEqual(ex[1].state, 'ok');
-        assert.ok(/rejected 25/.test(ex[ex.length - 1].text) && ex[ex.length - 1].state === 'odd');
-        assert.ok(calls.every((p) => p.serviceID === 0x22 && p.udsData.length === 2), 'reads only');
-        assert.deepStrictEqual(calls.filter((p) => 'busChannel' in p).map((p) => p.targetAddress), [0x40, 0x29, 0x12]);
+        assert.ok(/verdict REQUEST_PENDING \| ANSWER F0 F2 71 01 0F 0B 40/.test(ex[0].text), ex[0].text);
+        assert.strictEqual(ex[0].state, 'ok');
+        assert.ok(/rejected 25/.test(ex[2].text) && ex[2].state === 'odd');
         assert.ok(rows.some((r) => /^  TASU def 1$/.test(r.label)), 'the definition is shown');
     }],
     ['Ext: not in the interface config, or no adapter: said so, nothing sent', async () => {

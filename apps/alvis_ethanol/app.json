@@ -2,13 +2,14 @@
   "id": "alvis_ethanol",
   "title": "Ethanol",
   "description": "Live ethanol content (E%) of the fuel, read from the engine unit: big gauge, target band, min / max and a 20 minute trend, a fill-up calculator (how much E85 and how much 93 to reach a target E%) and a debug page of read-only DME requests. Read-only.",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "vendor": "custom",
   "loggingId": "OAE1",
   "iconGlyph": "E%",
   "signals": {
     "com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu": {
       "_instances": "SystemFunctionsInternalTasuInst1",
+      "tasuExclusiveMode": "rs",
       "_methods": [
         "sendTasuRequest",
         "sendTasuRequestExt"
@@ -50,7 +51,7 @@
     {"key": "bandHigh", "label": "Target band to", "type": "number", "unit": "%", "default": 50,
      "steps": [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100]},
     {"key": "source", "label": "Ethanol source", "type": "choice", "default": "auto",
-     "options": [["auto", "Auto (first that answers)"], ["550D", "550D (BMW alcohol in fuel)"], ["OBD 52", "OBD 01 PID 52"], ["F452", "F452 (OBD 52 via UDS)"]]},
+     "options": [["auto", "Auto (first that answers)"], ["manual", "Entered by hand"], ["550D", "550D (BMW alcohol in fuel)"], ["OBD 52", "OBD 01 PID 52"], ["F452", "F452 (OBD 52 via UDS)"]]},
     {"key": "blendTarget", "label": "Fill-up target", "type": "number", "unit": "% ethanol", "default": 40,
      "steps": [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85]},
     {"key": "e85Content", "label": "E85 at the pump is really", "type": "number", "unit": "% ethanol", "default": 85,
@@ -62,8 +63,8 @@
      "steps": [40, 45, 50, 52, 55, 59, 60, 63, 65, 68, 70, 74, 80, 83, 85, 90]},
     {"key": "fuelNow", "label": "Fuel in the tank now", "type": "choice", "default": "car",
      "options": [["car", "Read from the car"], ["0", "Empty"], ["0.125", "1/8"], ["0.25", "1/4"], ["0.375", "3/8"], ["0.5", "1/2"], ["0.625", "5/8"], ["0.75", "3/4"], ["0.875", "7/8"]]},
-    {"key": "ethanolNow", "label": "Ethanol now, when not read", "type": "number", "unit": "%", "default": 10,
-     "steps": [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85]},
+    {"key": "ethanolNow", "label": "Ethanol now (entered by hand)", "type": "number", "unit": "%", "default": 10,
+     "steps": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]},
     {"key": "volumeUnit", "label": "Fill-up amounts in", "type": "choice", "default": "gal",
      "options": [["gal", "US gallons"], ["l", "Litres"]]},
     {"key": "theme", "label": "Colour theme", "type": "choice", "default": "m_tricolour",

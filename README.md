@@ -41,6 +41,16 @@ says NO DATA and the details line shows the refusal codes. `config.probe` lists 
 (raw bytes on the details line and the Debug page); use it to work out the scaling of another BMW-specific identifier,
 then add it to `config.candidates`.
 
+## When the car gives no reading
+
+On some cars the head unit cannot reach the engine unit at all (on the first car tried, a 2021 G01 with ZGW_01, every
+chassis / powertrain unit stayed silent to every app, upstream's Engine Config included). Then the E% is **entered by
+hand**: after 5 failed rounds (Auto), or with Settings -> Ethanol source -> *Entered by hand*, the Ethanol page shows
+the entered value (badge ENTERED) and its two buttons become **E% -1 / E% +1** (also Settings -> Ethanol now, 0-100).
+Read it from the tuner's app after a fill-up. The DME is then asked only every 10 minutes in Auto, and not at all when
+entered by hand: each unanswered request holds the head unit's diagnostic transport 5-8 s, turning other apps'
+requests away meanwhile. An entered value is never taken as a reading (no min / max / trend from it).
+
 ## Fill-up calculator
 
 The **Fill-up** tab. Set the target with **Target -5 / +5** in the bar (or Settings -> Fill-up target);

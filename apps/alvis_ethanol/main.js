@@ -94,6 +94,12 @@ mgu.run({
                 return ctx.signals.call(tap.proxy, 'sendTasuRequestExt', params, 8000)
                     .then((v) => { tap.trace('=', 'Ext ' + JSON.stringify(v)); return v; }, (e) => { tap.trace('=', 'Ext call failed: ' + (e && e.message || e)); throw e; });
             },
+            getField(name) {
+                if (!tap.proxy) return Promise.reject(new Error('no transport proxy yet'));
+                if (typeof tap.proxy.getValue !== 'function') return Promise.reject(new Error('the proxy has no getValue'));
+                // from a fresh tick, as kit/runtime/signals.js reads fields (the native binding deadlocks inline)
+                return new Promise((resolve) => setImmediate(resolve)).then(() => tap.proxy.getValue(name, 3000));
+            },
             subscribe(name) {
                 if (!tap.proxy) return Promise.reject(new Error('no transport proxy yet'));
                 return ctx.signals.on(tap.proxy, name, (v) => { tap.trace('<', name + ' ' + JSON.stringify(v).slice(0, 200)); tap.hear(v); }, log);
@@ -103,7 +109,18 @@ mgu.run({
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);
-        const value = () => (demoOn() ? demoValue() : (cur !== null && mono() - curAt < 15000 ? cur : null));
+        /*
+         * The E% entered by hand (Settings > Ethanol now, or the Ethanol page's -1 / +1): shown when the source is
+         * "Entered by hand", or when the car gives no reading (Auto: the DME failed GIVE_UP rounds in a row, as on a car
+         * whose head unit cannot reach it). It is never taken as a reading: no min / max / trend from it.
+         */
+        const GIVE_UP = 5, RETRY_MS = 10 * 60 * 1000;
+        let lastPoll = 0, misses = 0;
+        const entered = () => G.clamp(Number(settings.get('ethanolNow')) || 0, 0, 100);
+        const fresh = () => cur !== null && mono() - curAt < 15000;
+        const manualOn = () => !demoOn() && (settings.get('source') === 'manual' || (misses >= GIVE_UP && !fresh()));
+        const value = () => (demoOn() ? demoValue() : fresh() ? cur : manualOn() ? entered() : null);
+        function stepEntered(d) { settings.set('ethanolNow', G.clamp(entered() + d, 0, 100)); }
 
         // Demo and real values never mix: switching between them (e.g. demo until the car link is up) starts
         // min / max, the trend and the age of reading afresh.
@@ -132,7 +149,9 @@ mgu.run({
             try {
                 reader.source = settings.get('source') || 'auto';
                 useMode(demoOn());
-                if (!demoOn() && link.ready) {
+                if (!demoOn() && settings.get('source') === 'manual') {
+                    // entered by hand: the DME is not asked
+                } else if (!demoOn() && link.ready) {
                     const s = await reader.poll();
                     if (s.value !== null) take(s.value);
                     else if (s.why !== lastWhy) { lastWhy = s.why; log.info('no ethanol value: ' + s.why); }
@@ -145,21 +164,30 @@ mgu.run({
             } finally { busy = false; }
         }
         // a Debug run has the link to itself (the transport takes one request at a time). The DME is asked at most every
-        // 4 s, and every 30 s once it failed 5 rounds in a row (back to every 4 s when it answers): a gentle pace, as
-        // upstream's Engine Config, so an unanswering DME doesn't keep the head unit's transport busy
-        let lastPoll = 0, misses = 0;
+        // 4 s, and only every 10 min once it failed GIVE_UP rounds in a row (back to every 4 s when it answers): each
+        // unanswered request holds the head unit's transport 5-8 s (other apps' requests are turned away meanwhile)
         pollTimer = setInterval(guard(log, 'poll', () => {
             if (dbg.running || busy) return undefined;
-            const every = misses >= 5 ? 30000 : 4000;
+            if (settings.get('source') === 'manual' && !demoOn()) return undefined;
+            const every = misses >= GIVE_UP ? RETRY_MS : 4000;
             if (Date.now() - lastPoll < every) return undefined;
             lastPoll = Date.now();
-            return poll().then(() => { misses = demoOn() || cur !== null && mono() - curAt < 6000 ? 0 : misses + 1; });
+            return poll().then(() => {
+                const was = misses;
+                misses = demoOn() || cur !== null && mono() - curAt < 6000 ? 0 : misses + 1;
+                if (misses === GIVE_UP && was < GIVE_UP) log.info('DME gave no reading ' + GIVE_UP + ' rounds in a row: the entered E% is shown, the DME asked every 10 min');
+                if (!misses && was >= GIVE_UP) log.info('DME answers again: readings shown');
+            });
         }), 1000);
         if (pollTimer && pollTimer.unref) pollTimer.unref();
 
 
         function details() {
             if (demoOn()) return 'demo data - no car link';
+            if (manualOn() && !fresh()) {
+                return settings.get('source') === 'manual' ? 'Entered by hand: -1 / +1 below, or Settings > Ethanol now'
+                    : 'No reading from the car: entered E% (-1 / +1 below); the DME is tried every 10 min';
+            }
             const l = reader.last;
             const probes = reader.probes.filter((p) => p.bytes).map((p) => p.label + ' ' + p.bytes).join('   ');
             if (l.value !== null) return 'DME 0x' + reader.cfg.ecu.toString(16) + '  ' + l.source + '  [' + l.bytes + ']' + (probes ? '   ' + probes : '');
@@ -217,7 +245,7 @@ mgu.run({
             row('MAX SINCE RESET', max, 372);
             const ageS = curAt ? Math.round((mono() - curAt) / 1000) : null;
             cv.text('AGE OF READING', 952, 414, 22, t.dim, { font: 'bold', spacing: 1.5 });
-            cv.text(demoOn() ? 'demo' : ageS === null ? '--' : ageS + ' s', 1552, 416, 30, t.text, { align: 'right', font: 'bold' });
+            cv.text(demoOn() ? 'demo' : manualOn() && !fresh() ? 'entered' : ageS === null ? '--' : ageS + ' s', 1552, 416, 30, t.text, { align: 'right', font: 'bold', literal: true });
 
             fitText(cv, details(), 952, 470, 20, t.dim, 600);
         }
@@ -243,7 +271,7 @@ mgu.run({
             const tankL = Number(settings.get('tankSize')) || 59;
             let nowE, eFrom;
             if (!demoOn() && cur !== null && mono() - curAt < 10 * 60 * 1000) { nowE = cur; eFrom = 'read from the car (' + (reader.last.source || 'DME') + ')'; }
-            else { nowE = Number(settings.get('ethanolNow')); eFrom = 'from Settings (no reading)'; }
+            else { nowE = entered(); eFrom = 'entered by hand (Ethanol page or Settings)'; }
             let nowL = null, lFrom;
             const fn = settings.get('fuelNow'), k = reader.lastTank, fresh = k.at && Date.now() - k.at < 2 * 60 * 1000;
             if (fn !== 'car') { nowL = Number(fn) * tankL; lFrom = 'from Settings'; }
@@ -329,8 +357,9 @@ mgu.run({
                 label('BTN_ACTION2', 'More rows');
             } else {
                 const src = settings.get('source') || 'auto';
+                if (manualOn() && !fresh()) { label('BTN_ACTION', 'E% -1'); label('BTN_ACTION2', 'E% +1'); return; }
                 label('BTN_ACTION', 'Reset min / max');
-                label('BTN_ACTION2', 'Source: ' + (src === 'auto' ? 'Auto' : src));
+                label('BTN_ACTION2', 'Source: ' + (src === 'auto' ? 'Auto' : src === 'manual' ? 'By hand' : src));
             }
         }
         function openPage(i) {
@@ -342,12 +371,14 @@ mgu.run({
         ui.onClick('BTN_ACTION', guard(log, 'action', () => {
             if (page === FILL) stepTarget(-1);
             else if (page === DEBUG) runDebug();
+            else if (manualOn() && !fresh()) stepEntered(-1);
             else { min = cur; max = cur; hist.length = 0; }
             labels();
         }));
         ui.onClick('BTN_ACTION2', guard(log, 'action 2', () => {
             if (page === FILL) stepTarget(1);
             else if (page === DEBUG) dbgPage++;
+            else if (manualOn() && !fresh()) stepEntered(1);
             else settings.cycle('source');
             labels();
         }));
@@ -361,7 +392,7 @@ mgu.run({
             if (page === FILL) drawFill(cv, t);
             else if (page === DEBUG) drawDebug(cv, t, dbg, dbgPage);
             else drawEthanol(cv, t);
-            G.frame(cv, t, TABS, page, [demoOn() && { text: 'DEMO' }, page === DEBUG && dbg.running && { text: 'RUNNING' }]);
+            G.frame(cv, t, TABS, page, [demoOn() && { text: 'DEMO' }, page === ETHANOL && manualOn() && !fresh() && { text: 'ENTERED' }, page === DEBUG && dbg.running && { text: 'RUNNING' }]);
             labels();
             return ui.image('MAIN_GFX', cv);
         }

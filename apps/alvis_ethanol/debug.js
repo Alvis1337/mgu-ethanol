@@ -315,6 +315,10 @@ class Debug {
             ' | instances ' + (Object.keys(ids[TASU] || {}).join(' ') || '-') : 'not listed', t ? 'info' : 'error');
         const diag = Object.keys(ifs).filter((k) => k !== TASU && /tasu|diag|uds|obd|tester/i.test(k));
         push('Other diagnostic interfaces', diag.length ? diag.map(short).join(', ') : 'none');
+        // the full names of the ones that could hold the transport (exclusive mode, an update session), for the next version
+        Object.keys(ifs).filter((k) => /TasuExclusiveMode|AolDiagnosticSession/.test(k)).forEach((k) => {
+            push('  full name', k + ' | instances ' + (Object.keys(ids[k] || {}).join(' ') || '-'));
+        });
         // what they offer: method / event names of each, and the transport's whole definition (wrapped; all in the log)
         diag.forEach((k) => {
             const d = ifs[k] || {};
@@ -324,19 +328,14 @@ class Debug {
         if (t) {
             const ext = (Array.isArray(t.methods) ? t.methods.filter((m) => m && m.name === 'sendTasuRequestExt')[0] : (t.methods || {}).sendTasuRequestExt) || null;
             if (ext) {
-                const found = [];
-                const grab = (v, depth) => {
-                    if (!v || typeof v !== 'object' || depth > 10) return;
-                    Object.keys(v).forEach((kk) => {
-                        if (kk === 'name' && typeof v[kk] === 'string' && v[kk] !== 'sendTasuRequestExt' && found.indexOf(v[kk]) < 0) found.push(v[kk]);
-                        grab(v[kk], depth + 1);
-                    });
-                };
-                grab(ext, 0);
-                if (!Array.isArray(t.methods) && !found.length) Object.keys(ext).forEach((kk) => found.push(kk));
-                this.extParams = found;
-                push('Ext request takes', found.join(', ') || '(no names found)');
+                // its inputs, in order, with their types (on the car: 8, sendTasuRequest's 7 and identifier, a ByteBuffer)
+                const ins = Array.isArray(ext.inputs) ? ext.inputs : Array.isArray(ext.in) ? ext.in : [];
+                this.extInputs = ins.filter((x) => x && typeof x.name === 'string').map((x) => ({ name: x.name, type: String(x.dataRef || x.type || '') }));
+                this.extParams = this.extInputs.map((x) => x.name);
+                push('Ext request takes', this.extInputs.length ? this.extInputs.map((x) => x.name + (x.type ? ':' + x.type.split('.').slice(-1)[0] : '')).join(', ') : '(no inputs found)');
             }
+            this.tasuFields = names(t.fields);
+            push('TASU fields', this.tasuFields.join(', ') || 'none');
             const def = JSON.stringify(t).replace(/"/g, '');
             this.log.info('debug catalog TASU definition: ' + JSON.stringify(t));
             for (let i = 0, n = 0; i < def.length && n < 24; i += 70, n++) push('  TASU def ' + (n + 1), def.slice(i, i + 70));
@@ -423,16 +422,31 @@ class Debug {
         if (/sendTasuResponseExt/.test(cfg) && this.ext.subscribe) {
             try { await this.ext.subscribe('sendTasuResponseExt'); push('Ext response event', 'subscribed'); } catch (e) { push('Ext response event', 'subscribe failed: ' + (e && e.message || e), 'error'); }
         }
-        const base = ['sourceAddress', 'targetAddress', 'serviceID', 'subroutineID', 'udsDataLength', 'udsData', 'deadlockTime'];
-        const extra = (this.extParams || []).filter((n) => base.indexOf(n) < 0);
+        // the transport's own fields (e.g. its exclusive mode): read with their getter, nothing set
+        if (this.ext.getField) {
+            for (const f of (this.tasuFields || [])) {
+                try { push('TASU field ' + f, JSON.stringify(await this.ext.getField(f)).slice(0, 200), 'ok', 'get'); } catch (e) { push('TASU field ' + f, 'read failed: ' + (e && e.message || e), 'error', 'get'); }
+            }
+        }
+        let tag = 0;
+        /** The Ext request's parameters: sendTasuRequest's, the identifier a tag, any other input 0 (or empty bytes). */
+        const extParamsFor = (ecu, data) => {
+            const known = { sourceAddress: 0xF2, targetAddress: ecu, serviceID: 0x22, subroutineID: 0, udsDataLength: data.length, udsData: Buffer.from(data), deadlockTime: 0 };
+            const ins = this.extInputs && this.extInputs.length ? this.extInputs : Object.keys(known).concat(['identifier']).map((n) => ({ name: n, type: n === 'identifier' ? 'ByteBuffer' : '' }));
+            const p = {};
+            ins.forEach((x) => {
+                if (Object.prototype.hasOwnProperty.call(known, x.name)) p[x.name] = known[x.name];
+                else if (x.name === 'identifier') p[x.name] = Buffer.from([0x45, 0x54, 0x48, ++tag & 0xFF]);
+                else p[x.name] = /ByteBuffer/.test(x.type) ? Buffer.alloc(0) : 0;
+            });
+            return p;
+        };
         const targets = [[0x40, [0xF1, 0x90], 'Body BDC (40): VIN'], [0x29, [0xF1, 0x50], 'DSC (29): type'], [0x12, [0xF1, 0x50], 'DME (12): type']];
         if (this.settleMs) await sleep(Math.max(this.settleMs, 8000));          // the transport free of the run's last request
         for (const tg of targets) {
             const ecu = tg[0], data = tg[1];
             try { check(ecu, 0x22, data, false); } catch (e) { push(tg[2], 'blocked: ' + e.message, 'error'); continue; }
-            const params = { sourceAddress: 0xF2, targetAddress: ecu, serviceID: 0x22, subroutineID: 0, udsDataLength: data.length, udsData: Buffer.from(data), deadlockTime: 0 };
-            const tries = [['', params]];
-            if (extra.length) { const p2 = Object.assign({}, params); extra.forEach((n) => { p2[n] = 0; }); tries.push([' +' + extra.join('/') + '=0', p2]); }
+            const tries = [['', extParamsFor(ecu, data)]];
             for (const tr of tries) {
                 const seq0 = this.tap ? this.tap.responses : 0, t0 = Date.now();
                 let verdict = null, err = null;
