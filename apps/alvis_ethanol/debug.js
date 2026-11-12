@@ -31,6 +31,8 @@ const { tally } = require('./tap');
 const pct = (b) => (b * 100 / 255).toFixed(1) + ' %';
 const ascii = (bytes) => bytes.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
 const u16 = (b) => b[0] * 256 + b[1];
+/** raw data bytes, and the first byte as a percentage (an ethanol content would read 0..100 %) */
+const raw = (b) => b.length + ' bytes, 1st = ' + pct(b[0]);
 
 /** OBD supported-PID bitmap (PIDs base+1 .. base+0x20): which of the PIDs we care about are flagged. */
 function supported(base, want) {
@@ -57,7 +59,14 @@ const PROBES = [
     ['Other units', 'Body BDC (40): VIN', { ecu: 0x40, did: 0xF190, decode: ascii }],
     ['Other units', 'Cluster KOMBI (60): VIN', { ecu: 0x60, did: 0xF190, decode: ascii }],
     ['Other units', 'Head unit (63): VIN', { ecu: 0x63, did: 0xF190, decode: ascii }],
-    ['DME identity', 'VIN', { did: 0xF190, decode: ascii }],
+    // the chassis / powertrain FlexRay units: on the first car tried none of them (nor the DME) answered 22 F150,
+    // while the body and PT-CAN units did. One answering here and not the DME points at the DME, none at the route.
+    ['FlexRay units', 'Stability DSC (29): VIN', { ecu: 0x29, did: 0xF190, decode: ascii }],
+    ['FlexRay units', 'Steering EPS (30): VIN', { ecu: 0x30, did: 0xF190, decode: ascii }],
+    ['FlexRay units', 'Airbag ACSM (01): VIN', { ecu: 0x01, did: 0xF190, decode: ascii }],
+    ['FlexRay units', 'DME 2 (13): VIN', { ecu: 0x13, did: 0xF190, decode: ascii }],
+    // a unit may take up to 10 s (BMW's own tools wait that long): the first DME request gets it
+    ['DME identity', 'VIN (waits 10 s)', { did: 0xF190, decode: ascii, timeoutMs: 10000 }],
     ['DME identity', 'SGBD index (DME type)', { did: 0xF150, decode: (b) => (b.length >= 3 ? hex(((b[0] << 16) | (b[1] << 8) | b[2]) >>> 0, 6) : 'short') }],
     ['Ethanol', 'BMW alcohol in fuel (550D)', { did: 0x550D, decode: (b) => pct(b[0]) + (b.length > 1 ? '  (2 bytes: ' + u16(b) + ')' : '') }],
     ['Ethanol', 'OBD 52 through UDS (F452)', { did: 0xF452, decode: (b) => pct(b[0]) }],
@@ -84,6 +93,16 @@ const PROBES = [
     ['Supported', 'OBD 01 PID 20', { obd: 0x20, decode: supported(0x20, WANT) }],
     ['Supported', 'OBD 01 PID 40', { obd: 0x40, decode: supported(0x40, WANT) }],
     ['DME identity', 'VIN, OBD 09 PID 02', { vin: 0x02, decode: (b) => ascii(b.slice(1)) }],
+    // the identifiers MHD's own app reads from the DME (upstream Engine Config's README, from captures of an MG1 with
+    // MHD): one of them may carry the flex fuel kit's ethanol content. Shown raw.
+    ['MHD reads', 'MHD 3010', { did: 0x3010, decode: raw }],
+    ['MHD reads', 'MHD 3020', { did: 0x3020, decode: raw }],
+    ['MHD reads', 'MHD 3030', { did: 0x3030, decode: raw }],
+    ['MHD reads', 'MHD 3031', { did: 0x3031, decode: raw }],
+    ['MHD reads', 'MHD 3032', { did: 0x3032, decode: raw }],
+    ['MHD reads', 'MHD 37FE', { did: 0x37FE, decode: raw }],
+    ['MHD reads', 'MHD 586A', { did: 0x586A, decode: raw }],
+    ['MHD reads', 'MHD 4098', { did: 0x4098, decode: raw }],
 ];
 
 /* SGBD index -> DME type, for the DME's F150 answer (the DME entries of the upstream kit's sgbd_index, MIT). */
@@ -229,7 +248,7 @@ class Debug {
         if (typeof this.link.wake === 'function') this.link.wake(ecu);      // the debug run asks every time
         const t0 = Date.now();
         let uds;
-        try { uds = await this.link.physical(ecu, sid, data, this.timeoutMs, accept); } catch (e) {
+        try { uds = await this.link.physical(ecu, sid, data, c.timeoutMs || this.timeoutMs, accept); } catch (e) {
             row.state = 'error'; row.text = errText(e); return row;
         }
         const ms = Date.now() - t0;
@@ -303,13 +322,16 @@ class Debug {
                 const r = await this.probe(this.probes[i]);
                 this.done++;
                 this.log.info('debug ' + r.req + ' ' + r.label + ': ' + r.text);
-                silent[ecu] = r.state === 'none' ? (silent[ecu] || 0) + 1 : 0;
+                // silence: no reply, or the head unit turning the request away (a transport reject / error, as
+                // 7F 31 25 for the DME on the first car tried)
+                const quiet = r.state === 'none' || (r.state === 'odd' && /^no reply, but \d+ came: (rejected|error)/.test(r.text));
+                silent[ecu] = quiet ? (silent[ecu] || 0) + 1 : 0;
                 const left = this.probes.slice(i + 1).filter((p) => ecuOf(p) === ecu).length;
                 if (silent[ecu] >= this.giveUpAfter && left) {
                     skipped[ecu] = true;
                     const who = ecu === this.ecu ? 'DME' : 'Unit ' + hex(ecu);
                     this.rows.push({ group: who, label: 'Skipped ' + left + ' requests', req: '', state: 'error',
-                        text: who + ' gave no reply ' + silent[ecu] + ' times in a row' + ((this.car() || {}).engine === 'running' ? ' with the engine running: see Transport' : ': engine off / asleep?') });
+                        text: who + ' gave no reply (or was turned away) ' + silent[ecu] + ' times in a row' + ((this.car() || {}).engine === 'running' ? ' with the engine running: see Transport' : ': engine off / asleep?') });
                     this.log.info('debug: ' + who + ' silent ' + silent[ecu] + ' times in a row, ' + left + ' requests skipped');
                 }
             }

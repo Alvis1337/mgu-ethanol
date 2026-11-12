@@ -68,9 +68,14 @@ gets lost:
    interface config and its access list carry the diagnostic transport's request method and response broadcast; and
    whether the app's subscription to the responses worked.
 2. **Bus**: 22 F150 to all units: which units answer at all, and the DME's type.
-3. **Other units**: the VIN from the gateway, body, cluster and head unit: the transport against the DME alone.
-4. **DME**: the VIN and type, the three ethanol identifiers, fuel type, tank level, engine values and which OBD PIDs
-   it claims to support.
+3. **Other units**: the VIN from the gateway, body, cluster and head unit, then from the chassis / powertrain FlexRay
+   units (DSC, EPS, airbag) and the DME's second address: the transport against the DME alone, and the DME against
+   the whole FlexRay side (on the first car tried, a G01 with an MHD flex fuel kit, the DME, DSC, EPS and airbag all
+   stayed silent to the head unit while the body units and the gearbox answered; the head unit answered each DME
+   request with the transport reject `F0 F2 7F 31 25`).
+4. **DME**: the VIN (waiting up to 10 s) and type, the three ethanol identifiers, fuel type, tank level, engine
+   values, which OBD PIDs it claims to support, and the identifiers MHD's own app reads (`3010 3020 3030 3031 3032
+   37FE 586A 4098`, raw: one may carry an MHD flex fuel kit's ethanol content).
 5. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
    and from which unit, errors, rejects, and the raw bytes of the last ones (`tap.js` counts them without changing
    anything; the kit drops whatever is not a reply silently).
@@ -78,7 +83,7 @@ gets lost:
 Each row shows the request, what it reads and the answer: green = a value (with the raw bytes), amber = refused (NRC),
 turned away by the head unit, or **"no reply, but ... came"** (the transport sent something during that request that
 the kit did not take as the reply: its raw bytes follow), grey = no reply at all. A unit that gives no reply to 4
-requests in a row has its other requests skipped. A run takes up to about two minutes and fills two pages: take a photo
+requests in a row, or that the head unit turns away 4 times, has its other requests skipped. A run takes up to about two minutes and fills two pages: take a photo
 of each (**More rows**). Every row is also written to the app's log. Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
 
 ## Install (MGU Store)

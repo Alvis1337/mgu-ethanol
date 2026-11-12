@@ -73,7 +73,7 @@ module.exports = [
         assert.strictEqual(link.calls.length, OTHER + 4, 'each other unit once, the DME 4 times');
         const skip = rows.filter((r) => /^Skipped/.test(r.label));
         assert.strictEqual(skip.length, 1, 'only the DME has requests left to skip');
-        assert.ok(/DME gave no reply 4 times in a row/.test(skip[0].text), skip[0].text);
+        assert.ok(/DME gave no reply \(or was turned away\) 4 times in a row/.test(skip[0].text), skip[0].text);
         const bus = rows.filter((r) => r.group === 'Bus')[0];
         assert.ok(/1 units; DME 12 NOT among them/.test(bus.text));
         assert.ok(rows.indexOf(bus) < rows.indexOf(rows.filter((r) => r.req === '22 F190 @10')[0]), 'the bus is asked first');
@@ -207,5 +207,34 @@ module.exports = [
         assert.strictEqual(odd.length, PROBES.length, 'every request saw a response the kit did not take');
         assert.ok(/no reply, but 1 came: from 12: 10 0B/.test(odd[0].text), odd[0].text);
         assert.strictEqual(rows.filter((r) => /^Skipped/.test(r.label)).length, 0);
+    }],
+    ['the head unit turning the DME away (7F 31 25) counts as silence: skipped after 4', async () => {
+        const tap = { responses: 0, subscribed: 'yes', requests: 0, verdicts: {}, callErrors: {}, frames: {}, errors: {}, rejects: {}, short: 0, last: [] };
+        const heard = [];
+        const link = fakeLink({}, null, true);
+        const phys = link.physical.bind(link);
+        link.physical = function (target) {
+            if (target !== 0x12) return phys.apply(null, arguments);       // the other units refuse (NRC): they answer
+            link.calls.push({ target });
+            tap.responses++;
+            heard.push({ seq: tap.responses, kind: 'rejected 25', bytes: 'F0 F2 7F 31 25' });
+            return Promise.resolve(null);
+        };
+        const rows = await new Debug(link, quiet, { ecu: 0x12, tap, tapSince: (n) => heard.filter((x) => x.seq > n) }).run();
+        assert.strictEqual(link.calls.filter((c) => c.target === 0x12).length, 4);
+        const skip = rows.filter((r) => /^Skipped/.test(r.label));
+        assert.strictEqual(skip.length, 1);
+        assert.ok(/^DME gave no reply \(or was turned away\) 4/.test(skip[0].text), skip[0].text);
+        assert.ok(rows.filter((r) => r.state === 'odd').every((r) => /rejected 25: F0 F2 7F 31 25/.test(r.text)));
+    }],
+    ['the first DME request waits 10 s, the others the default', async () => {
+        const link = fakeLink({}, null, true);
+        const t = [];
+        const phys = link.physical.bind(link);
+        link.physical = function (target, sid, data, timeoutMs) { if (target === 0x12) t.push(timeoutMs); return phys.apply(null, arguments); };
+        await new Debug(link, quiet, { ecu: 0x12 }).run();
+        assert.strictEqual(t[0], 10000);
+        assert.ok(t.slice(1).every((x) => x === 3000));
+        assert.ok(PROBES.some((p) => p[2].ecu === 0x29) && PROBES.some((p) => p[2].did === 0x4098), 'DSC and the MHD identifiers are asked');
     }],
 ];
