@@ -105,7 +105,7 @@ mgu.run({
                 return ctx.signals.on(tap.proxy, name, (v) => { tap.trace('<', name + ' ' + JSON.stringify(v).slice(0, 200)); tap.hear(v); }, log);
             },
         };
-        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car, ext });
+        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car, ext, dumpDir: ctx.dataDir });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);

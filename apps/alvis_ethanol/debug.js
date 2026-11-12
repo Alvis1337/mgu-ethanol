@@ -193,6 +193,7 @@ class Debug {
         // the unit's own SOME/IP interface catalog (what BMW's installer checks apps against: kit/tools/build.py)
         this.catalogFile = (opts && opts.catalogFile) || '/etc/oap/someip/someip-interfaces.json';
         this.catalogMaxParse = (opts && opts.catalogMaxParse) || 16 * 1024 * 1024;   // bytes parsed as JSON at most
+        this.dumpDir = (opts && opts.dumpDir) || null;                               // write signals.txt / routing.json here
         // where the installed apps are (oap_<uid>/ folders side by side): for the other apps' logs
         this.appsDir = (opts && opts.appsDir) || path.resolve(__dirname, '..', '..', '..');
         this.settleMs = opts && opts.settleMs != null ? opts.settleMs : 5000;          // quiet before the first request
@@ -287,7 +288,7 @@ class Debug {
      */
     catalogRows() {
         const rows = [], push = (label, text, state) => rows.push({ group: 'Catalog', label, req: 'catalog', state: state || 'info', text });
-        const RX = /ethanol|alcohol|alkohol|flex.?fuel|e85|fuel.?qual|fuel.?type|fuel.?compos|kraftstoff.?(qual|art)|krst/i;
+        const RX = /ethanol|alcohol|alkohol|flex.?fuel|e85|fuel.?qual|fuel.?type|fuel.?compos|kraftstoff|krst|gemisch|mixture|lambda|einspritz|injection|verbrenn|combust|oktan|octan|benzin|\broz\b|\bron\b/i;
         let size = -1;
         try { size = fs.statSync(this.catalogFile).size; } catch (e) { /* reported below */ }
         if (size > this.catalogMaxParse) {
@@ -310,6 +311,23 @@ class Debug {
         const names = (x) => (!x ? [] : Array.isArray(x) ? x.map((e) => (e && typeof e === 'object' ? e.name : e)).filter(Boolean) : Object.keys(x));
         const short = (k) => k.split('.').slice(-1)[0];
         push('Unit catalog', Object.keys(ifs).length + ' interfaces (' + txt.length + ' bytes)');
+        // Dump the whole catalog to the app's data dir, to study off the unit (pull it over the Store phone page or a
+        // shell). signals.txt: every interface and its field names, to grep for a fuel / mixture value the unit already
+        // receives. routing.json: the full definitions of the transport and the diagnostic-routing interfaces.
+        if (this.dumpDir) {
+            try {
+                const lines = [];
+                Object.keys(ifs).sort().forEach((k) => {
+                    const d = ifs[k] || {};
+                    lines.push(k + '\tfields:' + (names(d.fields).join(',') || '-') + '\tmethods:' + (names(d.methods).join(',') || '-') + '\tevents:' + (names(d.events).join(',') || '-'));
+                });
+                fs.writeFileSync(path.join(this.dumpDir, 'signals.txt'), lines.join('\n') + '\n');
+                const keep = {};
+                Object.keys(ifs).filter((k) => /tasu|diag|uds|obd|tester|aoldiagnostic|activationwire|hsfz/i.test(k)).forEach((k) => { keep[k] = ifs[k]; });
+                fs.writeFileSync(path.join(this.dumpDir, 'routing.json'), JSON.stringify(keep, null, 1));
+                push('Catalog dumped to', this.dumpDir + '/signals.txt (' + Object.keys(ifs).length + ' interfaces), routing.json', 'ok');
+            } catch (e) { push('Catalog dump', 'failed: ' + (e && e.message || e), 'error'); }
+        }
         const t = ifs[TASU];
         push('TASU in the catalog', t ? 'methods ' + (names(t.methods).join(' ') || '-') + ' | events ' + (names(t.events).join(' ') || '-') +
             ' | instances ' + (Object.keys(ids[TASU] || {}).join(' ') || '-') : 'not listed', t ? 'info' : 'error');
