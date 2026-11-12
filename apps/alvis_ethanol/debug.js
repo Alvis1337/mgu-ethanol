@@ -140,6 +140,9 @@ class Debug {
         // the kit's second place for interface configs (kit/runtime/signals.js), and the manifest the installer got
         this.ifaceDir2 = (opts && opts.ifaceDir2) || path.resolve(__dirname, '..', 'someipdefs');
         this.manifestFile = (opts && opts.manifestFile) || path.resolve(__dirname, '..', 'manifest.json');
+        // the unit's own SOME/IP interface catalog (what BMW's installer checks apps against: kit/tools/build.py)
+        this.catalogFile = (opts && opts.catalogFile) || '/etc/oap/someip/someip-interfaces.json';
+        this.catalogMaxParse = (opts && opts.catalogMaxParse) || 16 * 1024 * 1024;   // bytes parsed as JSON at most
         this.car = (opts && opts.car) || (() => ({}));
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
@@ -211,6 +214,59 @@ class Debug {
             rows.push({ label: 'Response subscription', req: 'TASU', state: sub === 'yes' ? 'ok' : 'error', text: String(sub) });
         }
         return rows.map((r) => Object.assign({ group: 'Setup' }, r));
+    }
+
+    /**
+     * The unit's interface catalog, as rows: what it lists for the diagnostic transport (methods, events, instances),
+     * other diagnostic-looking interfaces, and every name or text in it that looks like ethanol / fuel quality - a
+     * car signal the app could subscribe to (as the cluster's fuel level) where the DME cannot be asked.
+     */
+    catalogRows() {
+        const rows = [], push = (label, text, state) => rows.push({ group: 'Catalog', label, req: 'catalog', state: state || 'info', text });
+        const RX = /ethanol|alcohol|alkohol|flex.?fuel|e85|fuel.?qual|fuel.?type|fuel.?compos|kraftstoff.?(qual|art)|krst/i;
+        let size = -1;
+        try { size = fs.statSync(this.catalogFile).size; } catch (e) { /* reported below */ }
+        if (size > this.catalogMaxParse) {
+            // too big to parse safely in the app's memory: scan its text for the names only
+            const big = readText(this.catalogFile) || '';
+            const found = [], re = /"([^"]{1,120})"/g;
+            let m;
+            while ((m = re.exec(big)) && found.length < 200) { if (RX.test(m[1]) && found.indexOf(m[1]) < 0) found.push(m[1]); }
+            push('Unit catalog', size + ' bytes: too big to parse here, names scanned only');
+            push('Ethanol / fuel names', found.length ? found.length + ' found (all in the log)' : 'none in the catalog', found.length ? 'ok' : 'none');
+            found.slice(0, 12).forEach((h, i) => push('match ' + (i + 1), h));
+            found.forEach((h) => this.log.info('debug catalog match: ' + h));
+            return rows;
+        }
+        const txt = readText(this.catalogFile);
+        if (txt === null) { push('Unit catalog', 'cannot read ' + this.catalogFile, 'error'); return rows; }
+        let db;
+        try { db = JSON.parse(txt); } catch (e) { push('Unit catalog', 'not JSON: ' + (e && e.message || e), 'error'); return rows; }
+        const ifs = (db && db.interfaces) || {}, ids = (db && db.instanceIDs) || {};
+        const names = (x) => (!x ? [] : Array.isArray(x) ? x.map((e) => (e && typeof e === 'object' ? e.name : e)).filter(Boolean) : Object.keys(x));
+        const short = (k) => k.split('.').slice(-1)[0];
+        push('Unit catalog', Object.keys(ifs).length + ' interfaces (' + txt.length + ' bytes)');
+        const t = ifs[TASU];
+        push('TASU in the catalog', t ? 'methods ' + (names(t.methods).join(' ') || '-') + ' | events ' + (names(t.events).join(' ') || '-') +
+            ' | instances ' + (Object.keys(ids[TASU] || {}).join(' ') || '-') : 'not listed', t ? 'info' : 'error');
+        const diag = Object.keys(ifs).filter((k) => k !== TASU && /tasu|diag|uds|obd|tester/i.test(k));
+        push('Other diagnostic interfaces', diag.length ? diag.map(short).join(', ') : 'none');
+        // names / texts that look like an ethanol or fuel quality signal, anywhere in the catalog
+        const hits = [];
+        const walk = (v, at, depth) => {
+            if (hits.length >= 200 || depth > 12 || v === null || typeof v !== 'object') return;
+            Object.keys(v).forEach((k) => {
+                const x = v[k], here = at + (Array.isArray(v) ? '[' + k + ']' : '.' + k);
+                if (!Array.isArray(v) && RX.test(k)) hits.push(here);
+                if (typeof x === 'string' && RX.test(x)) hits.push(here + ' = ' + x);
+                walk(x, here, depth + 1);
+            });
+        };
+        Object.keys(ifs).forEach((k) => walk(ifs[k], short(k), 0));
+        push('Ethanol / fuel names', hits.length ? hits.length + (hits.length >= 200 ? '+' : '') + ' found (all in the log)' : 'none in the catalog', hits.length ? 'ok' : 'none');
+        hits.slice(0, 12).forEach((h, i) => push('match ' + (i + 1), h));
+        hits.forEach((h) => this.log.info('debug catalog match: ' + h));
+        return rows;
     }
 
     /** What the transport said since the app started (tap.js), as rows. */
@@ -304,7 +360,7 @@ class Debug {
         try {
             const lr = this.linkRow();
             this.rows.push(lr);
-            this.carRows().concat(this.setupRows()).forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
+            this.carRows().concat(this.setupRows(), this.catalogRows()).forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
             if (!this.link.ready) {
                 lr.state = 'error';
                 lr.text = 'diagnostic link not ready' + (this.link.error ? ': ' + this.link.error : '') + ' - nothing sent';

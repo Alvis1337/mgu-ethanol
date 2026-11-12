@@ -237,4 +237,35 @@ module.exports = [
         assert.ok(t.slice(1).every((x) => x === 3000));
         assert.ok(PROBES.some((p) => p[2].ecu === 0x29) && PROBES.some((p) => p[2].did === 0x4098), 'DSC and the MHD identifiers are asked');
     }],
+    ['catalog: the transport as the unit lists it, and ethanol / fuel quality names anywhere', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ethanol-cat-'));
+        const file = path.join(dir, 'someip-interfaces.json');
+        fs.writeFileSync(file, JSON.stringify({
+            interfaces: {
+                'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu': { methods: { sendTasuRequest: {} }, events: [{ name: 'sendTasuResponse' }] },
+                'de.bmw.diagnosis.ObdService': { methods: {} },
+                'de.bmw.infotainment.vehicle.CDS2': { fields: { statusFuelQuality: { getter: {}, type: { members: [{ name: 'ethanolPortion' }] } } } },
+                'de.bmw.infotainment.KombiIF': { fields: { statusRangeTankStatus: { type: { enum: ['KRAFTSTOFFART_E85'] } } } },
+            },
+            instanceIDs: { 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu': { SystemFunctionsInternalTasuInst1: 1, SystemFunctionsInternalTasuInst2: 2 } },
+        }));
+        const logged = [];
+        const rows = new Debug(fakeLink({}), { info: (m) => logged.push(m), warn() {}, error() {} }, { catalogFile: file }).catalogRows();
+        const by = (l) => rows.filter((r) => r.label === l)[0];
+        assert.ok(/^4 interfaces/.test(by('Unit catalog').text));
+        assert.strictEqual(by('TASU in the catalog').text, 'methods sendTasuRequest | events sendTasuResponse | instances SystemFunctionsInternalTasuInst1 SystemFunctionsInternalTasuInst2');
+        assert.strictEqual(by('Other diagnostic interfaces').text, 'ObdService');
+        assert.ok(/^3 found/.test(by('Ethanol / fuel names').text), by('Ethanol / fuel names').text);
+        const m = rows.filter((r) => /^match/.test(r.label)).map((r) => r.text);
+        assert.ok(m.indexOf('CDS2.fields.statusFuelQuality') >= 0, m.join(' | '));
+        assert.ok(m.some((x) => /ethanolPortion$/.test(x)), m.join(' | '));
+        assert.ok(m.some((x) => /= KRAFTSTOFFART_E85$/.test(x)), m.join(' | '));
+        assert.strictEqual(logged.filter((x) => /catalog match/.test(x)).length, 3);
+        const big = new Debug(fakeLink({}), quiet, { catalogFile: file, catalogMaxParse: 100 }).catalogRows();
+        assert.ok(/too big to parse here/.test(big[0].text), big[0].text);
+        assert.ok(big.some((r) => r.text === 'statusFuelQuality') && big.some((r) => r.text === 'KRAFTSTOFFART_E85'), big.map((r) => r.text).join(' | '));
+        const none = new Debug(fakeLink({}), quiet, { catalogFile: '/nonexistent/c.json' }).catalogRows();
+        assert.strictEqual(none.length, 1);
+        assert.ok(/^cannot read/.test(none[0].text));
+    }],
 ];

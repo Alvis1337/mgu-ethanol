@@ -67,16 +67,22 @@ gets lost:
    this unit's firmware lacks it (`kit/missing-interfaces.json`); whether the manifest as built, the app's generated
    interface config and its access list carry the diagnostic transport's request method and response broadcast; and
    whether the app's subscription to the responses worked.
-2. **Bus**: 22 F150 to all units: which units answer at all, and the DME's type.
-3. **Other units**: the VIN from the gateway, body, cluster and head unit, then from the chassis / powertrain FlexRay
+2. **Catalog**: the unit's own SOME/IP interface catalog (`/etc/oap/someip/someip-interfaces.json`): what it lists
+   for the diagnostic transport (methods, events, instances), other diagnostic interfaces, and every name in it that
+   looks like an ethanol / fuel quality signal - a car signal the app could subscribe to where the DME can't be asked.
+3. **Bus**: 22 F150 to all units: which units answer at all, and the DME's type.
+4. **Other units**: the VIN from the gateway, body, cluster and head unit, then from the chassis / powertrain FlexRay
    units (DSC, EPS, airbag) and the DME's second address: the transport against the DME alone, and the DME against
    the whole FlexRay side (on the first car tried, a G01 with an MHD flex fuel kit, the DME, DSC, EPS and airbag all
    stayed silent to the head unit while the body units and the gearbox answered; the head unit answered each DME
-   request with the transport reject `F0 F2 7F 31 25`).
-4. **DME**: the VIN (waiting up to 10 s) and type, the three ethanol identifiers, fuel type, tank level, engine
+   request with `F0 F2 7F 31 25`). The head unit wraps each request in a RoutineControl (`31 01 0F0B`: an answer
+   comes back as `71 01 0F 0B`, the unit's address, a length and the UDS reply), so `7F 31 25` is that routine's
+   negative answer with NRC 25, noResponseFromSubnetComponent: the unit never answered. Such frames carry no
+   address, so one can land in the next request's window.
+5. **DME**: the VIN (waiting up to 10 s) and type, the three ethanol identifiers, fuel type, tank level, engine
    values, which OBD PIDs it claims to support, and the identifiers MHD's own app reads (`3010 3020 3030 3031 3032
    37FE 586A 4098`, raw: one may carry an MHD flex fuel kit's ethanol content).
-5. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
+6. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
    and from which unit, errors, rejects, and the raw bytes of the last ones (`tap.js` counts them without changing
    anything; the kit drops whatever is not a reply silently).
 
