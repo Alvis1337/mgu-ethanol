@@ -1,0 +1,9 @@
+The files under kit/ are an unmodified copy of part of https://github.com/cauliflowermossgrape/idrive7-apps
+at commit 10b0433220428cbe4bb247892ee94315a5695b4b, under its MIT licence (kit/LICENSE, which also credits
+the Chinese translation; its attribution note is kept as kit/NOTICE.zh-CN.md). The copied files are
+kit/runtime/ (all of it), kit/platform/permissions.json, kit/tools/build.py, kit/tools/pack_data.py,
+kit/tools/localize.py, kit/tools/locale-revisions.json, kit/tools/oapgen/ and kit/tools/render_icons.py.
+The font atlases in kit/runtime/fonts/ are rendered from the Ubuntu font family; cjk.json is rendered from
+Noto Sans SC (SIL Open Font License 1.1, kit/runtime/fonts/OFL-NotoSansSC.txt).
+No BMW code or SDK is included: the head unit supplies its own oap-sdk when it builds the app.
+kit/icons/adam_shiftlights.svg is this repo's own work, under the root LICENSE.
