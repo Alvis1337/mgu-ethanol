@@ -4,7 +4,13 @@ An app for the BMW iDrive 7 head unit (MGU) that shows the **ethanol content (E%
 a flex-fuel setup (an ethanol content analyzer feeding the DME). It is a source for the
 [MGU Store](https://github.com/robertnisipeanu/mgu-store): the head unit builds the app from this repository.
 
-Unofficial: nothing here is made, endorsed or supported by BMW AG. Install at your own risk, with the car parked.
+> **Disclaimer: use entirely at your own risk.** This is an unofficial hobby project: nothing here is made, endorsed
+> or supported by BMW AG, MHD, the MGU Store or any tuner. It runs on a modified head unit and talks to your car's
+> control units. The author is **not responsible for anything** that happens from using it: damage to the car or the
+> head unit, warranty claims, fault codes, failed updates, bricked modules, fines, accidents, wrong fuel mixtures or
+> any other loss. The E% it shows and the fill-up amounts it works out may be wrong; check them yourself (a fuel
+> test kit, your tuner's app) before relying on them. Never use it while driving. Install it only if you accept all
+> of this.
 
 ![The Ethanol page (demo data)](docs/screens/ethanol.png)
 
@@ -141,6 +147,13 @@ NODE=/path/to/node8 tools/check.sh                           # Node 8 syntax of 
 
 The car runs **Node 8**: no `?.`, `??`, object spread, `flat`, `matchAll`, optional catch binding. Every callback goes
 through `guard()` in `main.js` (the platform uninstalls an app that crashes).
+
+## License
+
+This repository's own work is released into the public domain under **The Unlicense** (see `LICENSE`): do anything
+you like with it, no conditions, and no warranty of any kind. The vendored MGU App Kit under `kit/` is not covered by
+that: it stays under its MIT licence (`kit/LICENSE`, `kit/NOTICE`), which asks that its copyright and licence notice
+be kept with copies of it.
 
 ## Layout
 
