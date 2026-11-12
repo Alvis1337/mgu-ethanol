@@ -6,6 +6,8 @@ a flex-fuel setup (an ethanol content analyzer feeding the DME). It is a source 
 
 Unofficial: nothing here is made, endorsed or supported by BMW AG. Install at your own risk, with the car parked.
 
+![The Ethanol page (demo data)](docs/screens/ethanol.png)
+
 ## What it does
 
 - Big E% number and a 0-100 bar, with a target band marked (default E30-E50, changeable in Settings).
@@ -43,6 +45,8 @@ then add it to `config.candidates`.
 
 ## When the car gives no reading
 
+![The Ethanol page with the E% entered by hand](docs/screens/ethanol-entered.png)
+
 On some cars the head unit cannot reach the engine unit at all (on the first car tried, a 2021 G01 with ZGW_01, every
 chassis / powertrain unit stayed silent to every app, upstream's Engine Config included). Then the E% is **entered by
 hand**: after 5 failed rounds (Auto), or with Settings -> Ethanol source -> *Entered by hand*, the Ethanol page shows
@@ -52,6 +56,8 @@ entered by hand: each unanswered request holds the head unit's diagnostic transp
 requests away meanwhile. An entered value is never taken as a reading (no min / max / trend from it).
 
 ## Fill-up calculator
+
+![The Fill-up page: a quarter tank of E22, target E40, E85 that is really E82](docs/screens/fill-up.png)
 
 The **Fill-up** tab. Set the target with **Target -5 / +5** in the bar (or Settings -> Fill-up target);
 it shows how much E85 and how much 93 to add to fill the tank at that E%, and the lowest and highest E% a full tank can
@@ -71,6 +77,8 @@ Amounts are in US gallons or litres (Settings -> Fill-up amounts in). Blending i
 good as the inputs: pump E85 varies, and a test kit or the car's own reading after a fill-up tells you what you got.
 
 ## Debug page
+
+![The Debug page, simulated replies (placeholder VIN): the body units answer, the chassis / powertrain ones don't](docs/screens/debug.png)
 
 The **Debug** tab, then **Run all requests**, with the engine running. One run is laid out to tell where an answer
 gets lost:
@@ -127,6 +135,7 @@ installs the GPU renderer and controller gate (`requires` in `mgu-repo.json`) fr
 ```sh
 python3 kit/tools/build.py alvis_ethanol --preview-only      # offline stage in dist/ (no SDK, not installable)
 node kit/tools/preview.js dist/alvis_ethanol preview render  # PNG of what it draws (demo data)
+node kit/tools/preview.js dist/alvis_ethanol preview --set source=manual --set demo=off render   # E% entered by hand
 NODE=/path/to/node8 tools/check.sh                           # Node 8 syntax of the kit and the app + unit tests
 ```
 
@@ -137,6 +146,7 @@ through `guard()` in `main.js` (the platform uninstalls an app that crashes).
 
 | Path | |
 | --- | --- |
+| `docs/screens/` | the README's screenshots: preview renders (`kit/tools/preview.js`), the Debug one from simulated replies |
 | `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `patient.js` (retry while the transport is busy), `tap.js` (what the transport said), `icon.png` |
 | `kit/` | the MGU App Kit from [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT, see `kit/LICENSE`), vendored as the Store builds from it |
 | `test/` | unit tests (`test/run.js`) |
