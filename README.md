@@ -88,7 +88,10 @@ gets lost:
 5. **DME**: the VIN (waiting up to 10 s) and type, the three ethanol identifiers, fuel type, tank level, engine
    values, which OBD PIDs it claims to support, and the identifiers MHD's own app reads (`3010 3020 3030 3031 3032
    37FE 586A 4098`, raw: one may carry an MHD flex fuel kit's ethanol content).
-6. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
+6. **Trace**: every request of the run, the transport's verdict on it and every response, with milliseconds from
+   the run's start, so a reject (which carries no address) can be tied to the request it answers. The car rows also
+   show the vehicle state (parked / ignition on / ready), which some units gate their answers on.
+7. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
    and from which unit, errors, rejects, and the raw bytes of the last ones (`tap.js` counts them without changing
    anything; the kit drops whatever is not a reply silently).
 

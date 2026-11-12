@@ -90,4 +90,19 @@ module.exports = [
         assert.strictEqual(tap.since(40).length, 0);
         assert.strictEqual(tap.since(0).length, 32);
     }],
+    ['trace: each request, its verdict and each response, in order', async () => {
+        const s = fakeSignals({ TasuErrorEnum: 'REQUEST_PENDING' }), tap = tapSignals(s);
+        await tap.signals.on('p', 'sendTasuResponse', () => {});
+        await tap.signals.call('p', 'sendTasuRequest', { targetAddress: 0x29, serviceID: 0x22, udsData: Buffer.from([0xF1, 0x50]) });
+        s.handlers.sendTasuResponse({ errorCode: 'NO_ERROR', udsResponse: Buffer.from([0xF0, 0xF2, 0x7F, 0x31, 0x25]) });
+        s.handlers.sendTasuResponse(frame(0x29, [0x62, 0xF1, 0x50, 0x0F, 0x28, 0x50]));
+        const tr = tap.stats.trace.map((e) => e.dir + ' ' + e.text);
+        assert.deepStrictEqual(tr, [
+            '> #1 to 29: 22 F1 50',
+            '= #1 REQUEST_PENDING',
+            '< rejected 25: F0 F2 7F 31 25',
+            '< from 29: 00 00 00 00 00 00 29 00 00 62 F1 50 0F 28 50',
+        ]);
+        assert.ok(tap.stats.trace.every((e) => typeof e.at === 'number'));
+    }],
 ];

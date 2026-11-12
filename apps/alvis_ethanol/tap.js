@@ -13,6 +13,8 @@
  *   tap.stats  // { requests, verdicts: { NO_ERROR: 27 }, responses, frames: { '12': 3 }, errors, rejects, short, last,
  *              //   subscribed: 'not yet' | 'yes' | 'failed: ...', recent: [{ seq, at, kind, bytes }] }
  *   tap.since(seq)  // the responses heard after response number seq (the last 32 are kept)
+ *   tap.stats.trace // [{ at, dir: '>' | '=' | '<', text }]: each request, the transport's verdict on it and each
+ *                   // response, in order with their times (the last 400), to tie a reject to its request
  */
 const REQUEST = 'sendTasuRequest', RESPONSE = 'sendTasuResponse';
 
@@ -38,8 +40,10 @@ function tapSignals(signals, opts) {
     const stats = {
         since: Date.now(), requests: 0, verdicts: {}, callErrors: {},
         responses: 0, frames: {}, errors: {}, rejects: {}, short: 0, last: [], firstVerdict: null,
-        subscribed: 'not yet', recent: [],
+        subscribed: 'not yet', recent: [], trace: [],
     };
+    const traceMax = (opts && opts.trace) || 400;
+    const trace = (dir, text) => { stats.trace.push({ at: Date.now(), dir, text }); while (stats.trace.length > traceMax) stats.trace.shift(); };
     const count = (m, k) => { m[k] = (m[k] || 0) + 1; };
 
     function see(v) {
@@ -56,6 +60,7 @@ function tapSignals(signals, opts) {
         while (stats.last.length > keep) stats.last.shift();
         stats.recent.push(seen);
         while (stats.recent.length > ring) stats.recent.shift();
+        trace('<', kind + ': ' + seen.bytes);
     }
 
     const tapped = Object.assign({}, signals, {
@@ -63,11 +68,15 @@ function tapSignals(signals, opts) {
             const r = signals.call(p, method, params, timeoutMs);
             if (method !== REQUEST) return r;
             stats.requests++;
+            const q = params || {}, data = toBytes(q.udsData);
+            const n = stats.requests;
+            trace('>', '#' + n + ' to ' + hex((q.targetAddress || 0) & 0xFF) + ': ' + [q.serviceID || 0].concat(data).map(hex).join(' '));
             return Promise.resolve(r).then((v) => {
                 count(stats.verdicts, verdictOf(v));
+                trace('=', '#' + n + ' ' + verdictOf(v));
                 if (stats.firstVerdict === null) { try { stats.firstVerdict = JSON.stringify(v); } catch (e) { stats.firstVerdict = String(v); } }
                 return v;
-            }, (e) => { count(stats.callErrors, String(e && e.message || e)); throw e; });
+            }, (e) => { count(stats.callErrors, String(e && e.message || e)); trace('=', '#' + n + ' call failed: ' + (e && e.message || e)); throw e; });
         },
         on(p, name, fn, log) {
             if (name !== RESPONSE) return signals.on(p, name, fn, log);

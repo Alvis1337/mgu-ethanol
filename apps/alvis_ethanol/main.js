@@ -64,7 +64,14 @@ mgu.run({
         let demoMode = null;                        // whether min / max / trend hold demo or real values
         let page = ETHANOL;
         // the car's own signals (no diagnostic request): engine state, and the fuel level from the instrument cluster
-        const car = { engine: null, tankL: null, tankAt: 0 };
+        const car = { engine: null, tankL: null, tankAt: 0, condition: null };
+        ctx.signals.watch('de.bmw.infrastructure.VehicleCondition', '1', {
+            VehicleCondition: (v) => {
+                const st = v && v.statusConditionVehicle;
+                if (st !== undefined && st !== car.condition) log.info('vehicle state: ' + st);
+                if (st !== undefined) car.condition = st;
+            },
+        }, log).then((r) => { if (r.error) log.warn('vehicle state signal: ' + r.error); }).catch((e) => log.warn('vehicle state signal: ' + e));
         ctx.signals.watch('de.bmw.infotainment.vehicle.CDS', '1', {
             statusEngineStatus: (v) => {
                 const st = v && v.statusEngineRunDrive;

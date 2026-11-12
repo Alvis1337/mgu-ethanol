@@ -313,4 +313,27 @@ module.exports = [
         assert.ok(at[0] - t0 >= 55, 'nothing sent while settling: ' + (at[0] - t0));
         for (let i = 1; i < EC; i++) assert.ok(at[i] - at[i - 1] >= 35, 'gap ' + i + ': ' + (at[i] - at[i - 1]));
     }],
+    ['vehicle state row, and the run trace with times from the run start', async () => {
+        const t0 = Date.now();
+        const tap = { responses: 0, subscribed: 'yes', requests: 0, verdicts: {}, callErrors: {}, frames: {}, errors: {}, rejects: {}, short: 0, last: [],
+            trace: [{ at: t0 - 5000, dir: '>', text: '#1 to 12: 22 55 0D' }] };
+        const link = fakeLink({}, null, true);
+        const phys = link.physical.bind(link);
+        link.physical = function (target, sid, data) {
+            tap.trace.push({ at: Date.now(), dir: '>', text: '#x to ' + target.toString(16) });
+            tap.trace.push({ at: Date.now(), dir: '<', text: 'rejected 25: F0 F2 7F 31 25' });
+            return phys.apply(null, arguments);
+        };
+        const d = new Debug(link, quiet, { tap, car: () => ({ engine: 'running', tankL: 20, condition: 'FAHREN' }) });
+        const rows = await d.run();
+        const vs = rows.filter((r) => r.label === 'Vehicle state')[0];
+        assert.strictEqual(vs.text, 'FAHREN = ready / engine running');
+        const tr = rows.filter((r) => r.group === 'Trace');
+        assert.ok(tr.length > 0 && tr.length <= 121, String(tr.length));
+        assert.ok(tr.every((r) => /^\+\d+ ms$|^\.\.\.$/.test(r.label)), 'times from the run start');
+        assert.ok(!tr.some((r) => /#1 to 12/.test(r.text)), 'nothing from before the run');
+        assert.strictEqual(tr.filter((r) => r.state === 'odd').length > 0, true, 'rejects marked');
+        const ten = new Debug(fakeLink({}), quiet, { car: () => ({ condition: 10 }) }).carRows();
+        assert.strictEqual(ten[2].text, '10 = FAHREN: ready / engine running');
+    }],
 ];

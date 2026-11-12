@@ -158,6 +158,15 @@ const errText = (e) => String(e && e.message || e).replace(/^transport refused: 
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* BMW's vehicle state (VehicleCondition.statusConditionVehicle), names as kit/runtime/car.js and Engine Config read them */
+const CONDITION = {
+    1: 'parked, battery low', 2: 'parked', 3: 'standby, nobody in', 5: 'WOHNEN: accessory, no ignition',
+    7: 'PRUEFEN: ignition on, engine off', 8: 'getting ready', 10: 'FAHREN: ready / engine running', 12: 'ending ready',
+    PARKEN_BN_NIO: 'parked, battery low', PARKEN_BN_IO: 'parked', STANDFUNKTIONEN_KUNDE_NICHT_IM_FZG: 'standby, nobody in',
+    WOHNEN: 'accessory, no ignition', PRUEFEN_ANALYSE_DIAGNOSE: 'ignition on, engine off', FAHRBEREITSCHAFT_HERSTELLEN: 'getting ready',
+    FAHREN: 'ready / engine running', FAHRBEREITSCHAFT_BEENDEN: 'ending ready',
+};
+
 const label = (p) => (p.did != null ? '22 ' + hex(p.did, 4) : p.obd != null ? '01 ' + hex(p.obd) : '09 ' + hex(p.vin)) + (p.ecu != null ? ' @' + hex(p.ecu) : '');
 
 const TASU = 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu';
@@ -218,6 +227,8 @@ class Debug {
                 text: eng + (c.engine === 'running' ? '' : c.engine == null ? '' : ': the DME may not answer') },
             { group: 'Car', label: 'Fuel level (cluster)', req: 'KombiIF', state: c.tankL == null ? 'none' : 'ok',
                 text: c.tankL == null ? 'no signal yet' : c.tankL + ' l' },
+            { group: 'Car', label: 'Vehicle state', req: 'VehCond', state: c.condition == null ? 'none' : 'info',
+                text: c.condition == null ? 'no signal yet' : String(c.condition) + (CONDITION[c.condition] ? ' = ' + CONDITION[c.condition] : '') },
         ];
     }
 
@@ -343,6 +354,17 @@ class Debug {
         });
         if (!rows.length) push('Other apps', 'no Engine Config / Live Data / M Vitals / Fault Scanner log found in ' + dirs.length + ' app folders', 'none');
         return rows;
+    }
+
+    /** The run's request trace (tap.js): each request, its verdict and each response, with ms from the run's start. */
+    traceRows() {
+        const t = this.tap;
+        if (!t || !t.trace) return [];
+        const mine = t.trace.filter((e) => e.at >= this.startedAt);
+        const rows = mine.map((e) => ({ group: 'Trace', label: '+' + (e.at - this.startedAt) + ' ms', req: e.dir === '>' ? 'sent' : e.dir === '=' ? 'verdict' : 'heard',
+            state: e.dir === '<' ? (/^from/.test(e.text) ? 'ok' : 'odd') : 'info', text: e.text }));
+        mine.forEach((e) => this.log.info('debug trace +' + (e.at - this.startedAt) + ' ' + e.dir + ' ' + e.text));
+        return rows.length > 120 ? rows.slice(0, 60).concat([{ group: 'Trace', label: '...', req: '', state: 'info', text: (rows.length - 120) + ' more in the log' }], rows.slice(-60)) : rows;
     }
 
     /** What the transport said since the app started (tap.js), as rows. */
@@ -480,6 +502,7 @@ class Debug {
             this.rows.push(end);
             this.log.info('debug link: ' + this.linkRow().text + ' | ' + end.text);
             this.transportRows().forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
+            this.traceRows().forEach((r) => this.rows.push(r));
         } finally {
             this.running = false;
             this.endedAt = Date.now();
