@@ -124,11 +124,16 @@ mgu.run({
                 log.warn('ethanol poll: ' + e);
             } finally { busy = false; }
         }
-        // a Debug run has the link to itself (the transport takes one request at a time)
+        // a Debug run has the link to itself (the transport takes one request at a time). The DME is asked at most every
+        // 4 s, and every 30 s once it failed 5 rounds in a row (back to every 4 s when it answers): a gentle pace, as
+        // upstream's Engine Config, so an unanswering DME doesn't keep the head unit's transport busy
+        let lastPoll = 0, misses = 0;
         pollTimer = setInterval(guard(log, 'poll', () => {
-            if (dbg.running) return undefined;
-            if (Date.now() - seenAt < 3000 || mono() - lastHist > 5000) return poll();
-            return undefined;
+            if (dbg.running || busy) return undefined;
+            const every = misses >= 5 ? 30000 : 4000;
+            if (Date.now() - lastPoll < every) return undefined;
+            lastPoll = Date.now();
+            return poll().then(() => { misses = demoOn() || cur !== null && mono() - curAt < 6000 ? 0 : misses + 1; });
         }), 1000);
         if (pollTimer && pollTimer.unref) pollTimer.unref();
 
@@ -236,7 +241,7 @@ mgu.run({
         /** Fill-up page: what the calculation starts from (left) and how much of each to add (right). */
         function drawFill(cv, t) {
             // the DME's tank level only where the cluster's fuel level signal has not come
-            if (settings.get('fuelNow') === 'car' && car.tankL === null && Date.now() - tankAt > 10000 && !dbg.running) { tankAt = Date.now(); readTank(); }
+            if (settings.get('fuelNow') === 'car' && car.tankL === null && Date.now() - tankAt > 30000 && !dbg.running) { tankAt = Date.now(); readTank(); }
             const inp = blendInputs(), gal = settings.get('volumeUnit') !== 'l', unit = gal ? 'gal' : 'l';
             const vol = (l) => (gal ? Blend.gallons(l) : l).toFixed(1);
             const p = inp.nowL === null ? null : Blend.plan(inp);

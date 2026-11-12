@@ -32,7 +32,9 @@ Tried in order, the first plausible answer wins (`config` in `apps/alvis_ethanol
 3. DID `F452` = the same PID through UDS 22. Last: on the first car tried it got no reply, and a request without a
    reply keeps the head unit's diagnostic transport busy for seconds (the app then waits and sends again, up to 12 s).
 
-Which of them a DME answers on a given tune is not known in advance: run the Debug page to see. Once you know,
+In the background the app asks the DME at most every 4 s (every 30 s after 5 failed rounds), UDS 22 only: **Auto**
+leaves the OBD service 01 candidate out (pin it in Settings to use it). Which of them a DME answers on a given tune is
+not known in advance: run the Debug page to see. Once you know,
 **Settings -> Ethanol source** (or the Source button on the Ethanol page) pins one of them instead of taking the
 first that answers. If none answers, the screen
 says NO DATA and the details line shows the refusal codes. `config.probe` lists extra identifiers that are only *read*
@@ -63,6 +65,10 @@ good as the inputs: pump E85 varies, and a test kit or the car's own reading aft
 The **Debug** tab, then **Run all requests**, with the engine running. One run is laid out to tell where an answer
 gets lost:
 
+0. **Engine Config's reads** go first, after 5 s with the link quiet: the same reads upstream's Engine Config makes
+   for its xDrive tab (DSC `0x29` 22 F150 / DBE1, transfer case `0x19` 22 F150 / DB32) and the DME's type, at its
+   pace (2 s timeout, one every 4 s). The page also shows the last DSC / DME exchanges from the other apps' logs
+   (Engine Config, Live Data, M Vitals, Fault Scanner) where this app may read them.
 1. **Car and setup**: the engine state and fuel level from the car's own signals; what the installer left out because
    this unit's firmware lacks it (`kit/missing-interfaces.json`); whether the manifest as built, the app's generated
    interface config and its access list carry the diagnostic transport's request method and response broadcast; and

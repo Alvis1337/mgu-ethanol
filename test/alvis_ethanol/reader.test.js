@@ -49,8 +49,14 @@ module.exports = [
         assert.strictEqual(s.source, 'F452');
         assert.strictEqual(s.bytes, '62 F4 52 66');
     }],
-    ['falls back to OBD service 01 when F452 is refused (NRC 31)', async () => {
-        const s = await new Reader(fake({ '22:f452': [0x7F, 0x22, 0x31], '1:52': [0x41, 0x52, 0x80] }), cfg).poll();
+    ['OBD service 01 only when pinned: Auto sends UDS 22 alone', async () => {
+        const link = fake({ '22:f452': [0x7F, 0x22, 0x31], '1:52': [0x41, 0x52, 0x80] });
+        const auto = await new Reader(link, cfg).poll();
+        assert.strictEqual(auto.value, null);
+        assert.ok(link.calls.every((c) => c.sid === 0x22), 'no OBD request in Auto');
+        const r = new Reader(link, cfg);
+        r.source = 'OBD 52';
+        const s = await r.poll();
         assert.strictEqual(Math.round(s.value), 50);
         assert.strictEqual(s.source, 'OBD 52');
     }],
@@ -62,7 +68,8 @@ module.exports = [
         const s = await new Reader(fake({ '22:f452': [0x7F, 0x22, 0x31] }), cfg).poll();
         assert.strictEqual(s.value, null);
         assert.ok(/F452 NRC 31/.test(s.why), s.why);
-        assert.ok(/OBD 52 no reply/.test(s.why), s.why);
+        assert.ok(/550D no reply/.test(s.why), s.why);
+        assert.ok(!/OBD/.test(s.why), s.why);
     }],
     ['a config.probe identifier is read but never becomes the value', async () => {
         const r = new Reader(fake({ '22:4ad5': [0x62, 0x4A, 0xD5, 0x01, 0x90] }), Object.assign({}, cfg, { probe: [{ did: '4AD5', bytes: 2, at: 0 }] }));
@@ -112,20 +119,25 @@ module.exports = [
         r.source = 'nonsense';                                 // unknown: back to all of them, in order (550D first)
         assert.strictEqual((await r.poll()).source, '550D');
     }],
-    ['tank: litres from 583B, else percent from OBD 2F, else why', async () => {
+    ['tank: litres from 583B; OBD 2F only when configured; else why', async () => {
         let k = await new Reader(fake({ '22:583b': [0x62, 0x58, 0x3B, 0x24] }), cfg).tank();
         assert.strictEqual(k.litres, 36); assert.strictEqual(k.source, '583B');
-        k = await new Reader(fake({ '22:583b': [0x7F, 0x22, 0x31], '1:2f': [0x41, 0x2F, 0x80] }), cfg).tank();
-        assert.strictEqual(k.litres, null); assert.strictEqual(Math.round(k.pct), 50); assert.strictEqual(k.source, 'OBD 2F');
+        const link = fake({ '22:583b': [0x7F, 0x22, 0x31], '1:2f': [0x41, 0x2F, 0x80] });
+        k = await new Reader(link, cfg).tank();
+        assert.strictEqual(k.pct, null, 'no OBD by default');
+        assert.ok(link.calls.every((c) => c.sid === 0x22));
+        const withObd = Object.assign({}, cfg, { tankPercent: [{ obd: '2F', bytes: 1, at: 0, factor: 100 / 255, min: 0, max: 100 }] });
+        k = await new Reader(fake({ '22:583b': [0x7F, 0x22, 0x31], '1:2f': [0x41, 0x2F, 0x80] }), withObd).tank();
+        assert.strictEqual(Math.round(k.pct), 50); assert.strictEqual(k.source, 'OBD 2F');
         k = await new Reader(fake({}), cfg).tank();
         assert.strictEqual(k.litres, null); assert.strictEqual(k.pct, null);
-        assert.ok(/583B no reply \/ OBD 2F no reply/.test(k.why), k.why);
+        assert.ok(/^583B no reply$/.test(k.why), k.why);
     }],
     ['every request goes to the DME and passes the read-only check', async () => {
         const link = fake({});
         const r = new Reader(link, cfg);
         await r.poll(); await r.probe(true);
-        assert.ok(link.calls.length >= 3);
+        assert.ok(link.calls.length >= 2);
         link.calls.forEach((c) => { check(c.target, c.sid, c.data, false); assert.strictEqual(c.target, 0x12); });
     }],
 ];

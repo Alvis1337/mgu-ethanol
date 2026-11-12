@@ -10,7 +10,12 @@ Module._resolveFilename = function (req, parent) {
     if (typeof req === 'string' && req.indexOf('./kit/') === 0) args[0] = path.join(root, 'kit', 'runtime', req.slice(6));
     return orig.apply(this, args);
 };
-const { Debug, PROBES } = require(path.join(root, 'apps', 'alvis_ethanol', 'debug.js'));
+const { Debug: RealDebug, PROBES, EC_PROBES, shortLine } = require(path.join(root, 'apps', 'alvis_ethanol', 'debug.js'));
+/** the Debug page without its 5 s settle and 4 s gaps, and without other apps' logs, unless a test asks */
+class Debug extends RealDebug {
+    constructor(link, log, opts) { super(link, log, Object.assign({ settleMs: 0, ecGapMs: 0, appsDir: '/nonexistent/apps' }, opts)); }
+}
+const EC = EC_PROBES.length;
 const { check } = require(path.join(root, 'kit', 'runtime', 'readonly-diag.js'));
 
 const fs = require('fs');
@@ -57,20 +62,21 @@ module.exports = [
         const link = fakeLink({}, null, true);
         const d = new Debug(link, quiet, { ecu: 0x12 });
         await d.run();
-        assert.strictEqual(link.calls.length, PROBES.length);
-        link.calls.forEach((c, i) => assert.strictEqual(c.target, target(PROBES[i])));
-        assert.ok(OTHER >= 4 && link.calls.slice(0, OTHER).every((c) => c.target !== 0x12), 'the other units are asked before the DME');
-        assert.strictEqual(link.wakes, PROBES.length, 'a silent unit is still asked');
+        assert.strictEqual(link.calls.length, EC + PROBES.length);
+        assert.deepStrictEqual(link.calls.slice(0, EC).map((c) => c.target), [0x29, 0x29, 0x19, 0x19, 0x12], "Engine Config's reads first");
+        link.calls.slice(EC).forEach((c, i) => assert.strictEqual(c.target, target(PROBES[i])));
+        assert.ok(OTHER >= 4 && link.calls.slice(EC, EC + OTHER).every((c) => c.target !== 0x12), 'the other units are asked before the DME');
+        assert.strictEqual(link.wakes, EC + PROBES.length, 'a silent unit is still asked');
         assert.strictEqual(d.running, false);
         assert.strictEqual(d.done, d.total);
-        assert.ok(d.rows.filter((r) => r.state === 'nrc').length === PROBES.length);
+        assert.ok(d.rows.filter((r) => r.state === 'nrc').length === EC + PROBES.length);
     }],
     ['a DME that gives no reply 4 times in a row: the rest is skipped, the bus is still asked', async () => {
         const units = new Map([[0x40, '0F1050']]);
         const link = fakeLink({}, units);
         const d = new Debug(link, quiet, { ecu: 0x12 });
         const rows = await d.run();
-        assert.strictEqual(link.calls.length, OTHER + 4, 'each other unit once, the DME 4 times');
+        assert.strictEqual(link.calls.length, EC + OTHER + 4, "Engine Config's reads, each other unit once, the DME 4 times");
         const skip = rows.filter((r) => /^Skipped/.test(r.label));
         assert.strictEqual(skip.length, 1, 'only the DME has requests left to skip');
         assert.ok(/DME gave no reply \(or was turned away\) 4 times in a row/.test(skip[0].text), skip[0].text);
@@ -82,7 +88,7 @@ module.exports = [
     ['an answer resets the count of no replies in a row', async () => {
         const link = fakeLink({ '22:550d': [0x62, 0x55, 0x0D, 0x66] });     // 3rd request answers, the rest are silent
         await new Debug(link, quiet, { ecu: 0x12 }).run();
-        assert.strictEqual(link.calls.length, OTHER + 3 + 4);
+        assert.strictEqual(link.calls.length, EC + OTHER + 3 + 4);
     }],
     ['answers, refusals and silence each show as such', async () => {
         const link = fakeLink({
@@ -134,10 +140,10 @@ module.exports = [
         const phys = link.physical.bind(link);
         link.physical = function () { if (n++ === 0) return Promise.reject(new Error('transport refused: APP_REQUEST_TEMPORARILY_NOT_ACCEPTED')); return phys.apply(null, arguments); };
         const rows = await new Debug(link, quiet, { ecu: 0x12 }).run();
-        const first = rows.filter((r) => r.req === '22 F190 @10')[0];  // the first request (the gateway's VIN)
+        const first = rows.filter((r) => r.req === '22 F150 @29')[0];  // the first request (Engine Config's DSC read)
         assert.strictEqual(first.state, 'error');
         assert.strictEqual(first.text, 'head unit refused: TEMPORARILY_NOT_ACCEPTED');
-        assert.strictEqual(link.calls.length, PROBES.length - 1);
+        assert.strictEqual(link.calls.length, EC + PROBES.length - 1);
     }],
     ['car signal rows: engine and cluster fuel level, or that none came', async () => {
         let car = { engine: 'running', tankL: 41 };
@@ -204,7 +210,7 @@ module.exports = [
         };
         const rows = await new Debug(link, quiet, { ecu: 0x12, tap, tapSince: (n) => heard.filter((x) => x.seq > n) }).run();
         const odd = rows.filter((r) => r.state === 'odd');
-        assert.strictEqual(odd.length, PROBES.length, 'every request saw a response the kit did not take');
+        assert.strictEqual(odd.length, EC + PROBES.length, 'every request saw a response the kit did not take');
         assert.ok(/no reply, but 1 came: from 12: 10 0B/.test(odd[0].text), odd[0].text);
         assert.strictEqual(rows.filter((r) => /^Skipped/.test(r.label)).length, 0);
     }],
@@ -221,7 +227,7 @@ module.exports = [
             return Promise.resolve(null);
         };
         const rows = await new Debug(link, quiet, { ecu: 0x12, tap, tapSince: (n) => heard.filter((x) => x.seq > n) }).run();
-        assert.strictEqual(link.calls.filter((c) => c.target === 0x12).length, 4);
+        assert.strictEqual(link.calls.filter((c) => c.target === 0x12).length, 1 + 4, "Engine Config's DME read, then 4 before the skip");
         const skip = rows.filter((r) => /^Skipped/.test(r.label));
         assert.strictEqual(skip.length, 1);
         assert.ok(/^DME gave no reply \(or was turned away\) 4/.test(skip[0].text), skip[0].text);
@@ -233,8 +239,9 @@ module.exports = [
         const phys = link.physical.bind(link);
         link.physical = function (target, sid, data, timeoutMs) { if (target === 0x12) t.push(timeoutMs); return phys.apply(null, arguments); };
         await new Debug(link, quiet, { ecu: 0x12 }).run();
-        assert.strictEqual(t[0], 10000);
-        assert.ok(t.slice(1).every((x) => x === 3000));
+        assert.strictEqual(t[0], 2000, "Engine Config's DME read: its 2 s");
+        assert.strictEqual(t[1], 10000);
+        assert.ok(t.slice(2).every((x) => x === 3000));
         assert.ok(PROBES.some((p) => p[2].ecu === 0x29) && PROBES.some((p) => p[2].did === 0x4098), 'DSC and the MHD identifiers are asked');
     }],
     ['catalog: the transport as the unit lists it, and ethanol / fuel quality names anywhere', async () => {
@@ -267,5 +274,43 @@ module.exports = [
         const none = new Debug(fakeLink({}), quiet, { catalogFile: '/nonexistent/c.json' }).catalogRows();
         assert.strictEqual(none.length, 1);
         assert.ok(/^cannot read/.test(none[0].text));
+    }],
+    ["other apps' logs: Engine Config's xDrive evidence, shortened; unreadable or absent said so", async () => {
+        const apps = fs.mkdtempSync(path.join(os.tmpdir(), 'ethanol-apps-'));
+        ['oap_101', 'oap_101/data', 'oap_102', 'oap_102/data', 'oap_103'].forEach((d) => fs.mkdirSync(path.join(apps, d)));   // (Node 8: no recursive)
+        const ev = { schema: 1, event: 'uds_result', target: '29', request: '22 F1 50', status: 'positive_response', response: '62 F1 50 0F 28 50', elapsedMs: 41 };
+        const id = { event: 'identified', snapshot: { dscIndex: '0F2850', dscUnit: 'DSC_G30N', supported: true, vehicle: { rpm: 702 } } };
+        fs.writeFileSync(path.join(apps, 'oap_102/data/live_adjustments.log'), [
+            '2026-11-12T20:30:01.000Z INFO starting live_adjustments 0.9.3',
+            '2026-11-12T20:30:05.000Z INFO xdrive-diagnostic ' + JSON.stringify(ev),
+            '2026-11-12T20:30:06.000Z INFO xdrive-diagnostic ' + JSON.stringify(id),
+            '2026-11-12T20:30:07.000Z INFO something else',
+        ].join('\n') + '\n');
+        const logged = [];
+        const rows = new Debug(fakeLink({}), { info: (m) => logged.push(m), warn() {}, error() {} }, { appsDir: apps }).otherLogRows();
+        assert.strictEqual(rows[0].label, 'Engine Config');
+        assert.ok(/^2 matching lines/.test(rows[0].text), rows[0].text);
+        assert.strictEqual(rows[1].text, '20:30:05 29 22 F1 50 -> positive_response 62 F1 50 0F 28 50 (41 ms)');
+        assert.strictEqual(rows[2].text, '20:30:06 identified: DSC 0F2850 DSC_G30N, supported true, rpm 702');
+        assert.strictEqual(logged.length, 2);
+        const none = new Debug(fakeLink({}), quiet, { appsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ethanol-noapps-')) }).otherLogRows();
+        assert.ok(/no Engine Config/.test(none[0].text));
+        const gone = new Debug(fakeLink({}), quiet, { appsDir: '/nonexistent/apps' }).otherLogRows();
+        assert.ok(/^cannot list/.test(gone[0].text));
+        assert.strictEqual(shortLine('2026-11-12T20:30:07.000Z WARN plain text'), '20:30:07 plain text');
+    }],
+    ["the settle and Engine Config's 4 s gaps are really waited (shortened here)", async () => {
+        const link = fakeLink({}, null, true);
+        const at = [];
+        const phys = link.physical.bind(link);
+        link.physical = function () { at.push(Date.now()); return phys.apply(null, arguments); };
+        const t0 = Date.now();
+        const d = new Debug(link, quiet, { settleMs: 60, ecGapMs: 40 });
+        const p = d.run();
+        await new Promise((r) => setTimeout(r, 20));
+        assert.strictEqual(d.settling, true);
+        await p;
+        assert.ok(at[0] - t0 >= 55, 'nothing sent while settling: ' + (at[0] - t0));
+        for (let i = 1; i < EC; i++) assert.ok(at[i] - at[i - 1] >= 35, 'gap ' + i + ': ' + (at[i] - at[i - 1]));
     }],
 ];

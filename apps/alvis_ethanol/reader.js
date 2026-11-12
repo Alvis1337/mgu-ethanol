@@ -19,9 +19,10 @@ const DEFAULT = {
         { obd: '52', bytes: 1, at: 0, factor: 100 / 255, offset: 0, min: 0, max: 100 },
     ],
     probe: [],
-    // fuel in the tank: litres from the DME (583B, DME8FF_R), else the OBD fuel level in % of the tank
+    // fuel in the tank: litres from the DME (583B, DME8FF_R). No OBD fallback by default (the cluster's fuel level
+    // signal comes first, main.js; OBD service 01 requests stay out of the background: see candidates())
     tankLitres: [{ did: '583B', bytes: 1, at: 0, factor: 1, offset: 0, min: 0, max: 150 }],
-    tankPercent: [{ obd: '2F', bytes: 1, at: 0, factor: 100 / 255, offset: 0, min: 0, max: 100 }],
+    tankPercent: [],
     // The link skips a unit after 5 requests in a row without an answer (kit/readonly-diag.js) until it is woken.
     // A DME that is asleep when the app opens (ignition off, engine not started) would then never be asked again:
     // wake it at most this often so reading starts once it answers.
@@ -55,10 +56,15 @@ class EthanolReader {
         return true;
     }
 
-    /** The candidates to try: all of config.candidates in order, or only the one chosen as the source. */
+    /**
+     * The candidates to try: config.candidates in order, or only the one chosen as the source. Auto leaves out the
+     * OBD service 01 ones (pin 'OBD 52' to use it): upstream's Engine Config, whose reads reach the chassis units on
+     * the car this was tried on, sends UDS 22 only, while this app's background OBD requests are one of the
+     * differences when the same units stay silent to it.
+     */
     candidates() {
         const all = this.cfg.candidates || [];
-        if (!this.source || this.source === 'auto') return all;
+        if (!this.source || this.source === 'auto') { const uds = all.filter((c) => !c.obd); return uds.length ? uds : all; }
         const one = all.filter((c) => DidReader.label(c) === this.source);
         return one.length ? one : all;
     }

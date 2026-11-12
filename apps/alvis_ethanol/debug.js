@@ -105,6 +105,44 @@ const PROBES = [
     ['MHD reads', 'MHD 4098', { did: 0x4098, decode: raw }],
 ];
 
+const idx = (b) => (b.length >= 3 ? hex(((b[0] << 16) | (b[1] << 8) | b[2]) >>> 0, 6) : 'short');
+
+/*
+ * The reads upstream's Engine Config makes for its xDrive tab (apps/live_adjustments/xdrive.js), the same bytes at its
+ * pace (2 s timeout, one every 4 s), sent first, on a quiet link: its owner reports it switches xDrive on this car,
+ * which needs the DSC to answer the head unit. If these answer here too, the DME's silence is the DME's; if they
+ * don't, while Engine Config's do, something this app does differs (its other traffic, its timing).
+ */
+const EC_PROBES = [
+    ['Engine Config reads', 'DSC (29): type', { ecu: 0x29, did: 0xF150, decode: idx, timeoutMs: 2000, gapMs: 4000 }],
+    ['Engine Config reads', 'DSC (29): xDrive DBE1', { ecu: 0x29, did: 0xDBE1, decode: (b) => b.map(hex).join(' ') + (b[0] ? ' (xDrive on)' : ' (off)'), timeoutMs: 2000, gapMs: 4000 }],
+    ['Engine Config reads', 'Transfer case LMV (19): type', { ecu: 0x19, did: 0xF150, decode: idx, timeoutMs: 2000, gapMs: 4000 }],
+    ['Engine Config reads', 'LMV (19): front torque DB32', { ecu: 0x19, did: 0xDB32, decode: (b) => b.map(hex).join(' '), timeoutMs: 2000, gapMs: 4000 }],
+    ['Engine Config reads', 'DME (12): type, same pace', { ecu: 0x12, did: 0xF150, decode: idx, timeoutMs: 2000, gapMs: 4000 }],
+];
+
+/* The other apps whose logs show their own DME / DSC exchanges on this unit (kit/runtime/mgu.js: data/<id>.log). */
+const OTHER_LOGS = [
+    ['live_adjustments', 'Engine Config', /xdrive|DME ident|UDS ->|uds_result|link/i],
+    ['live_data', 'Live Data', /DME|unit 12|22 |UDS|engine/i],
+    ['car_vitals', 'M Vitals', /DME|UDS|boost|OBD/i],
+    ['dtc_scanner', 'Fault Scanner', /scan|unit|UDS|19 02/i],
+];
+
+/** One log line made short: the time, and for Engine Config's JSON evidence its exchange in a few words. */
+function shortLine(line) {
+    const at = line.slice(11, 19), rest = line.replace(/^\S+\s+\S+\s+/, '');
+    const j = rest.indexOf('{');
+    if (/xdrive-diagnostic/.test(rest) && j >= 0) {
+        try {
+            const o = JSON.parse(rest.slice(j)), sn = o.snapshot || {};
+            if (o.event === 'uds_result') return at + ' ' + o.target + ' ' + o.request + ' -> ' + o.status + (o.response ? ' ' + o.response : '') + ' (' + o.elapsedMs + ' ms)';
+            return at + ' ' + o.event + ': DSC ' + (sn.dscIndex || '?') + ' ' + (sn.dscUnit || '') + ', supported ' + sn.supported + ', rpm ' + (sn.vehicle && sn.vehicle.rpm);
+        } catch (e) { /* not JSON after all */ }
+    }
+    return at + ' ' + rest;
+}
+
 /* SGBD index -> DME type, for the DME's F150 answer (the DME entries of the upstream kit's sgbd_index, MIT). */
 const DME_TYPES = {
     '0F1090': 'MSD85L6', '0F10A0': 'D73N57A0', '0F1370': 'MSD87', '0F1380': 'MSD87_R0', '0F13E0': 'MSV90', '0F13F0': 'MEVD172',
@@ -117,6 +155,8 @@ const DME_TYPES = {
 
 /** An error as a short row text: the transport's refusals without their long prefix. */
 const errText = (e) => String(e && e.message || e).replace(/^transport refused: (APP_REQUEST_)?/, 'head unit refused: ');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const label = (p) => (p.did != null ? '22 ' + hex(p.did, 4) : p.obd != null ? '01 ' + hex(p.obd) : '09 ' + hex(p.vin)) + (p.ecu != null ? ' @' + hex(p.ecu) : '');
 
@@ -143,6 +183,11 @@ class Debug {
         // the unit's own SOME/IP interface catalog (what BMW's installer checks apps against: kit/tools/build.py)
         this.catalogFile = (opts && opts.catalogFile) || '/etc/oap/someip/someip-interfaces.json';
         this.catalogMaxParse = (opts && opts.catalogMaxParse) || 16 * 1024 * 1024;   // bytes parsed as JSON at most
+        // where the installed apps are (oap_<uid>/ folders side by side): for the other apps' logs
+        this.appsDir = (opts && opts.appsDir) || path.resolve(__dirname, '..', '..', '..');
+        this.settleMs = opts && opts.settleMs != null ? opts.settleMs : 5000;          // quiet before the first request
+        this.ecProbes = (opts && opts.ecProbes) || EC_PROBES;
+        this.ecGapMs = opts && opts.ecGapMs != null ? opts.ecGapMs : null;            // tests: no 4 s gaps
         this.car = (opts && opts.car) || (() => ({}));
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
@@ -154,8 +199,8 @@ class Debug {
         this.endedAt = 0;
     }
 
-    /** steps of a run: the bus discovery, then every request */
-    get total() { return this.probes.length + 1; }
+    /** steps of a run: Engine Config's reads, the bus discovery, then every request */
+    get total() { return this.ecProbes.length + this.probes.length + 1; }
 
     /** The link's own state, as a row. */
     linkRow() {
@@ -269,6 +314,37 @@ class Debug {
         return rows;
     }
 
+    /**
+     * The last DME / DSC exchanges of the other apps on this unit, from their logs (data/<id>.log in each
+     * oap_<uid>/), where this app may read them: Engine Config's xDrive evidence in particular.
+     */
+    otherLogRows() {
+        const rows = [], push = (label, text, state) => rows.push({ group: 'Other apps', label, req: 'log', state: state || 'info', text });
+        let dirs;
+        try { dirs = fs.readdirSync(this.appsDir).filter((d) => /^oap_/.test(d)); } catch (e) {
+            push('Other apps', 'cannot list ' + this.appsDir + ': ' + (e && e.code || e), 'error');
+            return rows;
+        }
+        OTHER_LOGS.forEach((o) => {
+            let file = null;
+            dirs.forEach((d) => { const f = path.join(this.appsDir, d, 'data', o[0] + '.log'); try { fs.accessSync(f); file = f; } catch (e) { /* not this one */ } });
+            if (!file) return;
+            let text = null, why = '';
+            try {
+                const fd = fs.openSync(file, 'r'), size = fs.fstatSync(fd).size, n = Math.min(size, 96 * 1024), buf = Buffer.alloc(n);
+                fs.readSync(fd, buf, 0, n, size - n);
+                fs.closeSync(fd);
+                text = buf.toString('utf8');
+            } catch (e) { why = String(e && e.code || e); }
+            if (text === null) { push(o[1], 'log there, cannot read it: ' + why, 'error'); return; }
+            const lines = text.split('\n').filter((l) => o[2].test(l));
+            push(o[1], lines.length + ' matching lines in the last ' + Math.round(text.length / 1024) + ' KB of its log', lines.length ? 'ok' : 'none');
+            lines.slice(-6).forEach((l) => { push('  ' + o[1], shortLine(l)); this.log.info('debug ' + o[1] + ' log: ' + l.slice(0, 400)); });
+        });
+        if (!rows.length) push('Other apps', 'no Engine Config / Live Data / M Vitals / Fault Scanner log found in ' + dirs.length + ' app folders', 'none');
+        return rows;
+    }
+
     /** What the transport said since the app started (tap.js), as rows. */
     transportRows() {
         const t = this.tap;
@@ -360,12 +436,21 @@ class Debug {
         try {
             const lr = this.linkRow();
             this.rows.push(lr);
-            this.carRows().concat(this.setupRows(), this.catalogRows()).forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
+            this.carRows().concat(this.setupRows(), this.otherLogRows(), this.catalogRows()).forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
             if (!this.link.ready) {
                 lr.state = 'error';
                 lr.text = 'diagnostic link not ready' + (this.link.error ? ': ' + this.link.error : '') + ' - nothing sent';
                 this.transportRows().forEach((r) => this.rows.push(r));
                 return this.rows;
+            }
+            // a quiet link first (the app's own reads are paused while a run lasts), then Engine Config's reads at its pace
+            if (this.settleMs) { this.settling = true; await sleep(this.settleMs); this.settling = false; }
+            for (const p of this.ecProbes) {
+                const r = await this.probe(p);
+                this.done++;
+                this.log.info('debug ' + r.req + ' ' + r.label + ': ' + r.text);
+                const gap = this.ecGapMs != null ? this.ecGapMs : p[2].gapMs;
+                if (gap) await sleep(gap);
             }
             const d = await this.discover();
             this.done++;
@@ -422,7 +507,7 @@ function drawDebug(cv, t, dbg, pageNo) {
     const W = cv.w;
     const rows = dbg.rows.length ? dbg.rows : [dbg.linkRow()];
     const perPage = PER_COL * 2, pages = Math.max(1, Math.ceil(rows.length / perPage)), page = (pageNo || 0) % pages;
-    const head = dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total + ' ...'
+    const head = dbg.settling ? 'Letting the link go quiet (5 s) ...' : dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total + ' ...'
         : dbg.endedAt ? 'Done in ' + Math.round((dbg.endedAt - dbg.startedAt) / 1000) + ' s. Take a photo of each page.'
             : 'Start the engine, then press Run all requests. Read-only: nothing is written.';
     fitText(cv, head, 24, 74, 20, dbg.running ? t.accent : t.text, W - 260, { font: 'bold' });
@@ -439,4 +524,4 @@ function drawDebug(cv, t, dbg, pageNo) {
     return cv;
 }
 
-module.exports = { Debug, PROBES, DME_TYPES, drawDebug, fitText };
+module.exports = { Debug, PROBES, EC_PROBES, DME_TYPES, drawDebug, fitText, shortLine };

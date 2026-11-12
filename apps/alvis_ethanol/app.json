@@ -2,7 +2,7 @@
   "id": "alvis_ethanol",
   "title": "Ethanol",
   "description": "Live ethanol content (E%) of the fuel, read from the engine unit: big gauge, target band, min / max and a 20 minute trend, a fill-up calculator (how much E85 and how much 93 to reach a target E%) and a debug page of read-only DME requests. Read-only.",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "vendor": "custom",
   "loggingId": "OAE1",
   "iconGlyph": "E%",
