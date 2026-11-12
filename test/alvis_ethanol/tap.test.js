@@ -65,4 +65,29 @@ module.exports = [
         assert.strictEqual(tally({}), 'none');
         assert.strictEqual(tally({ A: 2, B: 1 }), 'A 2, B 1');
     }],
+    ['the response subscription: yes, or why it failed', async () => {
+        const ok = fakeSignals(), t1 = tapSignals(ok);
+        assert.strictEqual(t1.stats.subscribed, 'not yet');
+        await t1.signals.on('p', 'sendTasuResponse', () => {});
+        await Promise.resolve();
+        assert.strictEqual(t1.stats.subscribed, 'yes');
+        const bad = fakeSignals();
+        bad.on = () => Promise.reject(new Error('event sendTasuResponse not in config'));
+        const t2 = tapSignals(bad);
+        let err = null;
+        try { await t2.signals.on('p', 'sendTasuResponse', () => {}); } catch (e) { err = e; }
+        assert.ok(err, 'the kit still sees the failure');
+        await Promise.resolve();
+        assert.strictEqual(t2.stats.subscribed, 'failed: event sendTasuResponse not in config');
+    }],
+    ['since(n): the responses after number n, from the last 32', async () => {
+        const s = fakeSignals(), tap = tapSignals(s);
+        await tap.signals.on('p', 'sendTasuResponse', () => {});
+        for (let i = 0; i < 40; i++) s.handlers.sendTasuResponse(frame(0x12, [0x62, 0xF1, 0x90, i]));
+        assert.strictEqual(tap.stats.responses, 40);
+        assert.strictEqual(tap.stats.recent.length, 32);
+        assert.deepStrictEqual(tap.since(37).map((x) => x.seq), [38, 39, 40]);
+        assert.strictEqual(tap.since(40).length, 0);
+        assert.strictEqual(tap.since(0).length, 32);
+    }],
 ];

@@ -60,17 +60,26 @@ good as the inputs: pump E85 varies, and a test kit or the car's own reading aft
 
 ## Debug page
 
-The **Debug** tab, then **Run all requests**, with the engine running (or at least the ignition on). It asks
-the DME for the VIN and its type (SGBD index), the three ethanol identifiers, fuel type, tank level, a few engine values
-and which OBD PIDs it claims to support, then which units are on the bus (22 F150 to all). Each row shows the request,
-what it reads, and the answer: green = a value (with the raw bytes), amber = refused (NRC) or turned away by the head
-unit, grey = no reply. After 4 requests in a row without a reply the DME is taken as asleep and its other requests are
-skipped (the bus is still asked). The page also shows the engine state and the fuel level from the car's own signals,
-and what the head unit's diagnostic transport said: how many requests it took and with which verdict, how many
-responses came back, from which unit, transport errors and rejects, and the raw bytes of the last ones (the kit drops
-anything that is not a reply silently; `tap.js` counts it without changing it). The run takes up to about a minute;
-take a photo of each page (More rows). Every row is also written to the app's log.
-Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
+The **Debug** tab, then **Run all requests**, with the engine running. One run is laid out to tell where an answer
+gets lost:
+
+1. **Car and setup**: the engine state and fuel level from the car's own signals; what the installer left out because
+   this unit's firmware lacks it (`kit/missing-interfaces.json`); whether the manifest as built, the app's generated
+   interface config and its access list carry the diagnostic transport's request method and response broadcast; and
+   whether the app's subscription to the responses worked.
+2. **Bus**: 22 F150 to all units: which units answer at all, and the DME's type.
+3. **Other units**: the VIN from the gateway, body, cluster and head unit: the transport against the DME alone.
+4. **DME**: the VIN and type, the three ethanol identifiers, fuel type, tank level, engine values and which OBD PIDs
+   it claims to support.
+5. **Transport**: what the head unit's diagnostic transport (TASU) said: its verdicts, how many responses came back
+   and from which unit, errors, rejects, and the raw bytes of the last ones (`tap.js` counts them without changing
+   anything; the kit drops whatever is not a reply silently).
+
+Each row shows the request, what it reads and the answer: green = a value (with the raw bytes), amber = refused (NRC),
+turned away by the head unit, or **"no reply, but ... came"** (the transport sent something during that request that
+the kit did not take as the reply: its raw bytes follow), grey = no reply at all. A unit that gives no reply to 4
+requests in a row has its other requests skipped. A run takes up to about two minutes and fills two pages: take a photo
+of each (**More rows**). Every row is also written to the app's log. Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
 
 ## Install (MGU Store)
 

@@ -6,15 +6,24 @@
  * Everything goes through the app's ReadOnlyDiag (kit/readonly-diag.js): UDS 22 (read data by identifier),
  * OBD 01 / 09 (current data / vehicle information) and 22 F1 50 to all units. Nothing is written or coded.
  *
- *   const dbg = new Debug(link, log, { ecu: 0x12, extra: config.probe, tap: tap.stats, car: () => car });
+ *   const dbg = new Debug(link, log, { ecu: 0x12, extra: config.probe, tap: tap.stats, tapSince: tap.since, car: () => car });
  *   (tap: what the transport said, tap.js; car(): { engine, tankL } from the car's own signals)
  *   dbg.run();          // in the background; dbg.rows fill in as answers arrive, dbg.running / dbg.done
  *
- * When the DME gives no reply to several requests in a row (asleep: ignition off), the rest of its requests are
- * skipped (each would wait timeoutMs and keep the transport busy) and the run goes on with the bus discovery.
+ * A run, in this order, so that one run tells where an answer gets lost:
+ *   1. the link, the car's own signals (engine running?), and how the app was set up on this unit: what the
+ *      installer left out (kit/missing-interfaces.json), whether the app's generated interface config and access
+ *      list have the transport's request method and its response broadcast, and whether the app subscribed to it;
+ *   2. 22 F150 to all units (does anything answer at all?);
+ *   3. the VIN from four other units (gateway, body, cluster, the head unit itself): the transport against the DME;
+ *   4. the DME's requests.
+ * A unit that gives no reply to giveUpAfter requests in a row (asleep) has its other requests skipped. When the kit
+ * says "no reply" but the transport did send something during that request (tap.js), the row shows it ('odd').
  *
- * A row: { group, label, req, state: 'wait' | 'ok' | 'nrc' | 'none' | 'error' | 'info', text }
+ * A row: { group, label, req, state: 'wait' | 'ok' | 'nrc' | 'none' | 'odd' | 'error' | 'info', text }
  */
+const fs = require('fs');
+const path = require('path');
 const { hex, NRC } = require('./kit/diag');
 const { withAlpha } = require('./kit/canvas');
 const { tally } = require('./tap');
@@ -44,6 +53,10 @@ const FUEL_TYPE = { 1: 'petrol', 2: 'methanol', 3: 'ethanol', 4: 'diesel', 5: 'L
  * which is what this page is for. F4xx = the OBD PID xx read through UDS (ISO 27145).
  */
 const PROBES = [
+    ['Other units', 'Gateway ZGW (10): VIN', { ecu: 0x10, did: 0xF190, decode: ascii }],
+    ['Other units', 'Body BDC (40): VIN', { ecu: 0x40, did: 0xF190, decode: ascii }],
+    ['Other units', 'Cluster KOMBI (60): VIN', { ecu: 0x60, did: 0xF190, decode: ascii }],
+    ['Other units', 'Head unit (63): VIN', { ecu: 0x63, did: 0xF190, decode: ascii }],
     ['DME identity', 'VIN', { did: 0xF190, decode: ascii }],
     ['DME identity', 'SGBD index (DME type)', { did: 0xF150, decode: (b) => (b.length >= 3 ? hex(((b[0] << 16) | (b[1] << 8) | b[2]) >>> 0, 6) : 'short') }],
     ['Ethanol', 'BMW alcohol in fuel (550D)', { did: 0x550D, decode: (b) => pct(b[0]) + (b.length > 1 ? '  (2 bytes: ' + u16(b) + ')' : '') }],
@@ -86,7 +99,12 @@ const DME_TYPES = {
 /** An error as a short row text: the transport's refusals without their long prefix. */
 const errText = (e) => String(e && e.message || e).replace(/^transport refused: (APP_REQUEST_)?/, 'head unit refused: ');
 
-const label = (p) => (p.did != null ? '22 ' + hex(p.did, 4) : p.obd != null ? '01 ' + hex(p.obd) : '09 ' + hex(p.vin));
+const label = (p) => (p.did != null ? '22 ' + hex(p.did, 4) : p.obd != null ? '01 ' + hex(p.obd) : '09 ' + hex(p.vin)) + (p.ecu != null ? ' @' + hex(p.ecu) : '');
+
+const TASU = 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu';
+const yes = (b) => (b ? 'yes' : 'NO');
+/** A file's text, or null. */
+const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
 
 class Debug {
     constructor(link, log, opts) {
@@ -96,6 +114,13 @@ class Debug {
         this.timeoutMs = (opts && opts.timeoutMs) || 3000;
         this.giveUpAfter = (opts && opts.giveUpAfter) || 4;     // no replies in a row before the DME is skipped
         this.tap = (opts && opts.tap) || null;
+        this.tapSince = (opts && opts.tapSince) || null;
+        // where the installed app's files are: kit/ next to this file, someipInterfaces/ two levels up (oap_<uid>/)
+        this.kitDir = (opts && opts.kitDir) || path.join(__dirname, 'kit');
+        this.ifaceDir = (opts && opts.ifaceDir) || path.resolve(__dirname, '..', '..', 'someipInterfaces');
+        // the kit's second place for interface configs (kit/runtime/signals.js), and the manifest the installer got
+        this.ifaceDir2 = (opts && opts.ifaceDir2) || path.resolve(__dirname, '..', 'someipdefs');
+        this.manifestFile = (opts && opts.manifestFile) || path.resolve(__dirname, '..', 'manifest.json');
         this.car = (opts && opts.car) || (() => ({}));
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
@@ -107,7 +132,7 @@ class Debug {
         this.endedAt = 0;
     }
 
-    /** steps of a run: every request, then the bus discovery */
+    /** steps of a run: the bus discovery, then every request */
     get total() { return this.probes.length + 1; }
 
     /** The link's own state, as a row. */
@@ -127,6 +152,46 @@ class Debug {
             { group: 'Car', label: 'Fuel level (cluster)', req: 'KombiIF', state: c.tankL == null ? 'none' : 'ok',
                 text: c.tankL == null ? 'no signal yet' : c.tankL + ' l' },
         ];
+    }
+
+    /**
+     * How the app was set up on this unit, as rows: what the installer left out because this unit's firmware lacks
+     * it, whether the generated interface config and access list carry the transport's request and response, and
+     * whether the app subscribed to the response.
+     */
+    setupRows() {
+        const rows = [];
+        const missing = readText(path.join(this.kitDir, 'missing-interfaces.json'));
+        let m = null;
+        try { m = missing ? JSON.parse(missing) : {}; } catch (e) { m = null; }
+        const keys = m ? Object.keys(m) : [];
+        rows.push({ label: 'Left out at install', req: 'build',
+            state: m === null ? 'error' : keys.some((k) => /Tasu/i.test(k)) ? 'error' : keys.length ? 'odd' : 'ok',
+            text: m === null ? 'unreadable: ' + missing.slice(0, 60) : keys.length ? keys.join(' | ') : 'nothing' });
+        let man = null;
+        try { man = JSON.parse(readText(this.manifestFile)); } catch (e) { man = null; }
+        const mt = man && man.proxies && man.proxies[TASU];
+        rows.push({ label: 'Manifest as built', req: 'build', state: mt && /sendTasuResponse/.test(JSON.stringify(mt)) ? 'ok' : 'error',
+            text: !man ? 'no ' + this.manifestFile : !mt ? 'TASU not in it' : 'instances ' + JSON.stringify(mt.instances) +
+                ', methods ' + JSON.stringify(mt.methods || []) + ', broadcasts ' + JSON.stringify(mt.broadcasts || []) });
+        const cfgName = TASU.replace(/\./g, '_') + '.json';
+        let cfgFile = path.join(this.ifaceDir, cfgName);
+        let cfg = readText(cfgFile);
+        if (cfg === null && readText(path.join(this.ifaceDir2, cfgName)) !== null) { cfgFile = path.join(this.ifaceDir2, cfgName); cfg = readText(cfgFile); }
+        rows.push({ label: 'TASU interface config', req: 'config', state: cfg && /sendTasuRequest/.test(cfg) && /sendTasuResponse/.test(cfg) ? 'ok' : 'error',
+            text: cfg === null ? 'no file ' + cfgFile : 'request ' + yes(/sendTasuRequest/.test(cfg)) + ', response ' + yes(/sendTasuResponse/.test(cfg)) + ' (' + cfg.length + ' bytes)' });
+        const acl = readText(path.join(this.ifaceDir, 'acl.json'));
+        rows.push({ label: 'TASU access list', req: 'acl', state: acl && /InternalTasu/.test(acl) ? 'info' : 'error',
+            text: acl === null ? 'no acl.json' : 'TASU ' + yes(/InternalTasu/.test(acl)) + ', request ' + yes(/sendTasuRequest/.test(acl)) + ', response ' + yes(/sendTasuResponse/.test(acl)) + ' (' + acl.length + ' bytes)' });
+        let files = null;
+        try { files = fs.readdirSync(this.ifaceDir).filter((f) => /\.json$/.test(f) && f !== 'acl.json'); } catch (e) { files = null; }
+        rows.push({ label: 'Interfaces generated', req: 'config', state: files && files.length ? 'info' : 'error',
+            text: files === null ? 'no folder ' + this.ifaceDir : files.length + ': ' + files.map((f) => f.replace(/\.json$/, '').split('_').slice(-1)[0]).join(', ') });
+        if (this.tap) {
+            const sub = this.tap.subscribed;
+            rows.push({ label: 'Response subscription', req: 'TASU', state: sub === 'yes' ? 'ok' : 'error', text: String(sub) });
+        }
+        return rows.map((r) => Object.assign({ group: 'Setup' }, r));
     }
 
     /** What the transport said since the app started (tap.js), as rows. */
@@ -154,7 +219,8 @@ class Debug {
     async probe(p) {
         const row = { group: p[0], label: p[1], req: label(p[2]), state: 'wait', text: '...' };
         this.rows.push(row);
-        const c = p[2], ecu = this.ecu;
+        const c = p[2], ecu = c.ecu != null ? c.ecu : this.ecu;
+        const seq0 = this.tap ? this.tap.responses : 0;
         let sid, data, ok;
         if (c.did != null) { sid = 0x22; data = [c.did >> 8, c.did & 0xFF]; ok = (u) => u[0] === 0x62 && ((u[1] << 8) | u[2]) === c.did; }
         else if (c.obd != null) { sid = 0x01; data = [c.obd]; ok = (u) => u[0] === 0x41 && u[1] === c.obd; }
@@ -167,7 +233,15 @@ class Debug {
             row.state = 'error'; row.text = errText(e); return row;
         }
         const ms = Date.now() - t0;
-        if (!uds) { row.state = 'none'; row.text = 'no reply (' + ms + ' ms)'; return row; }
+        if (!uds) {
+            // the kit took nothing as the reply: did the transport send anything meanwhile?
+            const heard = this.tapSince ? this.tapSince(seq0) : [];
+            if (heard.length) {
+                row.state = 'odd';
+                row.text = 'no reply, but ' + heard.length + ' came: ' + heard[0].kind + ': ' + heard[0].bytes;
+            } else { row.state = 'none'; row.text = 'no reply (' + ms + ' ms)'; }
+            return row;
+        }
         const bytes = uds.map((x) => hex(x)).join(' ');
         if (uds[0] === 0x7F) { row.state = 'nrc'; row.text = 'NRC ' + hex(uds[2]) + (NRC[uds[2]] ? ' ' + NRC[uds[2]] : ''); return row; }
         const body = uds.slice(sid === 0x22 ? 3 : 2);
@@ -211,31 +285,34 @@ class Debug {
         try {
             const lr = this.linkRow();
             this.rows.push(lr);
-            this.carRows().forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
+            this.carRows().concat(this.setupRows()).forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
             if (!this.link.ready) {
                 lr.state = 'error';
                 lr.text = 'diagnostic link not ready' + (this.link.error ? ': ' + this.link.error : '') + ' - nothing sent';
                 this.transportRows().forEach((r) => this.rows.push(r));
                 return this.rows;
             }
-            let silentRun = 0;
-            for (let i = 0; i < this.probes.length; i++) {
-                const r = await this.probe(this.probes[i]);
-                this.done++;
-                this.log.info('debug ' + r.req + ' ' + r.label + ': ' + r.text);
-                silentRun = r.state === 'none' ? silentRun + 1 : 0;
-                if (silentRun >= this.giveUpAfter && i < this.probes.length - 1) {
-                    const left = this.probes.length - 1 - i;
-                    this.rows.push({ group: 'DME', label: 'Skipped ' + left + ' requests', req: '', state: 'error',
-                        text: 'DME gave no reply ' + silentRun + ' times in a row' + ((this.car() || {}).engine === 'running' ? ' with the engine running: see Transport' : ': engine off / asleep?') });
-                    this.log.info('debug: DME silent ' + silentRun + ' times in a row, ' + left + ' requests skipped');
-                    this.done += left;
-                    break;
-                }
-            }
             const d = await this.discover();
             this.done++;
             this.log.info('debug ' + d.label + ': ' + d.text + (d.all ? ' | ' + d.all : ''));
+            const silent = {}, skipped = {};
+            const ecuOf = (p) => (p[2].ecu != null ? p[2].ecu : this.ecu);
+            for (let i = 0; i < this.probes.length; i++) {
+                const ecu = ecuOf(this.probes[i]);
+                if (skipped[ecu]) { this.done++; continue; }
+                const r = await this.probe(this.probes[i]);
+                this.done++;
+                this.log.info('debug ' + r.req + ' ' + r.label + ': ' + r.text);
+                silent[ecu] = r.state === 'none' ? (silent[ecu] || 0) + 1 : 0;
+                const left = this.probes.slice(i + 1).filter((p) => ecuOf(p) === ecu).length;
+                if (silent[ecu] >= this.giveUpAfter && left) {
+                    skipped[ecu] = true;
+                    const who = ecu === this.ecu ? 'DME' : 'Unit ' + hex(ecu);
+                    this.rows.push({ group: who, label: 'Skipped ' + left + ' requests', req: '', state: 'error',
+                        text: who + ' gave no reply ' + silent[ecu] + ' times in a row' + ((this.car() || {}).engine === 'running' ? ' with the engine running: see Transport' : ': engine off / asleep?') });
+                    this.log.info('debug: ' + who + ' silent ' + silent[ecu] + ' times in a row, ' + left + ' requests skipped');
+                }
+            }
             const end = this.statsRow();
             this.rows.push(end);
             this.log.info('debug link: ' + this.linkRow().text + ' | ' + end.text);
@@ -276,7 +353,7 @@ function drawDebug(cv, t, dbg, pageNo) {
     rows.slice(page * perPage, (page + 1) * perPage).forEach((r, k) => {
         const x = 24 + (k >= PER_COL ? colW + 24 : 0), y = 106 + (k % PER_COL) * 24;
         if (k % 2 === 1) cv.fillRect(x - 4, y - 18, colW + 8, 24, withAlpha('#ffffff', 0.04));
-        const c = r.state === 'ok' ? GO : r.state === 'nrc' || r.state === 'error' ? t.warn : r.state === 'none' || r.state === 'wait' ? t.dim : t.text;
+        const c = r.state === 'ok' ? GO : r.state === 'nrc' || r.state === 'error' || r.state === 'odd' ? t.warn : r.state === 'none' || r.state === 'wait' ? t.dim : t.text;
         fitText(cv, r.req, x, y, 17, t.dim, 96);
         fitText(cv, r.label, x + 100, y, 17, t.text, 250);
         fitText(cv, r.text, x + 358, y, 17, c, colW - 358);

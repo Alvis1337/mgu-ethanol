@@ -10,7 +10,9 @@
  *
  *   const tap = tapSignals(ctx.signals);
  *   const link = new ReadOnlyDiag(tap.signals, log);
- *   tap.stats  // { requests, verdicts: { NO_ERROR: 27 }, responses, frames: { '12': 3 }, errors, rejects, short, last }
+ *   tap.stats  // { requests, verdicts: { NO_ERROR: 27 }, responses, frames: { '12': 3 }, errors, rejects, short, last,
+ *              //   subscribed: 'not yet' | 'yes' | 'failed: ...', recent: [{ seq, at, kind, bytes }] }
+ *   tap.since(seq)  // the responses heard after response number seq (the last 32 are kept)
  */
 const REQUEST = 'sendTasuRequest', RESPONSE = 'sendTasuResponse';
 
@@ -32,10 +34,11 @@ function verdictOf(r) {
 }
 
 function tapSignals(signals, opts) {
-    const keep = (opts && opts.keep) || 4;
+    const keep = (opts && opts.keep) || 4, ring = (opts && opts.ring) || 32;
     const stats = {
         since: Date.now(), requests: 0, verdicts: {}, callErrors: {},
         responses: 0, frames: {}, errors: {}, rejects: {}, short: 0, last: [], firstVerdict: null,
+        subscribed: 'not yet', recent: [],
     };
     const count = (m, k) => { m[k] = (m[k] || 0) + 1; };
 
@@ -48,8 +51,11 @@ function tapSignals(signals, opts) {
         else if (b.length >= 5 && b[2] === 0x7F) { count(stats.rejects, hex(b[4])); kind = 'rejected ' + hex(b[4]); }
         else if (b.length < 10) { stats.short++; kind = 'short'; }
         else { count(stats.frames, hex(b[6])); kind = 'from ' + hex(b[6]); }
-        stats.last.push({ at: Date.now(), kind, bytes: b.slice(0, 24).map(hex).join(' ') + (b.length > 24 ? ' ..' : '') });
+        const seen = { seq: stats.responses, at: Date.now(), kind, bytes: b.slice(0, 24).map(hex).join(' ') + (b.length > 24 ? ' ..' : '') };
+        stats.last.push(seen);
         while (stats.last.length > keep) stats.last.shift();
+        stats.recent.push(seen);
+        while (stats.recent.length > ring) stats.recent.shift();
     }
 
     const tapped = Object.assign({}, signals, {
@@ -65,10 +71,13 @@ function tapSignals(signals, opts) {
         },
         on(p, name, fn, log) {
             if (name !== RESPONSE) return signals.on(p, name, fn, log);
-            return signals.on(p, name, (v) => { try { see(v); } catch (e) { /* counting only */ } fn(v); }, log);
+            const r = signals.on(p, name, (v) => { try { see(v); } catch (e) { /* counting only */ } fn(v); }, log);
+            Promise.resolve(r).then(() => { stats.subscribed = 'yes'; }, (e) => { stats.subscribed = 'failed: ' + (e && e.message || e); });
+            return r;
         },
     });
-    return { signals: tapped, stats };
+    const since = (seq) => stats.recent.filter((x) => x.seq > seq);
+    return { signals: tapped, stats, since };
 }
 
 /** "NO_ERROR 27, X 2" (or none) */

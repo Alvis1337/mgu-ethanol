@@ -79,7 +79,7 @@ mgu.run({
                 if (typeof l === 'number' && l >= 0 && l < 255) { car.tankL = l; car.tankAt = Date.now(); }
             },
         }, log).then((r) => { if (r.error) log.warn('fuel level signal: ' + r.error); }).catch((e) => log.warn('fuel level signal: ' + e));
-        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, car: () => car });
+        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);
