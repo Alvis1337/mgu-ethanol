@@ -6,8 +6,12 @@
  *   - status: in / above / below the band
  *   - min / max since reset, 20-minute trend
  *   - details line: which identifier answered, raw bytes, or why nothing did
- *   - Fill-up calculator (BLEND): how much E85 and how much 93 to add to fill the tank at a target E% (blend.js)
- *   - Debug page (DEBUG): a list of read-only requests to the DME and what each one answered (debug.js)
+ *   - Fill-up page: how much E85 and how much 93 to add to fill the tank at a target E% (blend.js)
+ *   - Debug page: a list of read-only requests to the DME and what each one answered (debug.js)
+ *
+ * One canvas screen with three pages (tabs): the kit's full-screen renderer runs one canvas screen, a second screen
+ * opened over it fought it for the display. BTN_ACTION / BTN_ACTION2 do the page's two jobs (their labels follow the
+ * page); BTN_PAGE turns the pages where the tabs cannot be touched (the kit hides it where they can).
  *
  * The value comes from the DME (ecu 0x12) with a read-only request (see reader.js, app.json config).
  * Without a car link the demo data runs (Settings > Demo data).
@@ -19,10 +23,13 @@ const { ReadOnlyDiag } = require('./kit/readonly-diag');
 const Reader = require('./reader');
 const Blend = require('./blend');
 const { Debug, drawDebug, fitText } = require('./debug');
+const { patient } = require('./patient');
 
 const W = 1600, H = 520;
 const GO = '#2fd27a';
 const HIST_MS = 20 * 60 * 1000;
+const TABS = ['Ethanol', 'Fill-up', 'Debug'];
+const ETHANOL = 0, FILL = 1, DEBUG = 2;
 
 const mono = () => { const h = process.hrtime(); return h[0] * 1000 + h[1] / 1e6; };
 
@@ -39,7 +46,8 @@ const guard = (log, name, fn) => function () {
 mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        const link = new ReadOnlyDiag(ctx.signals, log);
+        // the read-only link, tried again while the head unit's transport is busy (patient.js)
+        const link = patient(new ReadOnlyDiag(ctx.signals, log));
         const reader = new Reader(link, (ctx.spec && ctx.spec.config) || {});
         // connect in the background: the screen must not wait for the diagnostic link
         link.init().catch((e) => { log.warn('diagnostic link: ' + (e && e.message || e)); });
@@ -49,6 +57,8 @@ mgu.run({
         const hist = [];                            // [steady time, %] every 5 s
         let lastHist = 0, seenAt = 0, busy = false, lastWhy = '', pollTimer = null;
         let demoMode = null;                        // whether min / max / trend hold demo or real values
+        let page = ETHANOL;
+        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);
@@ -93,10 +103,14 @@ mgu.run({
                 log.warn('ethanol poll: ' + e);
             } finally { busy = false; }
         }
-        pollTimer = setInterval(guard(log, 'poll', () => { if (Date.now() - seenAt < 3000 || mono() - lastHist > 5000) return poll(); }), 1000);
+        // a Debug run has the link to itself (the transport takes one request at a time)
+        pollTimer = setInterval(guard(log, 'poll', () => {
+            if (dbg.running) return undefined;
+            if (Date.now() - seenAt < 3000 || mono() - lastHist > 5000) return poll();
+            return undefined;
+        }), 1000);
         if (pollTimer && pollTimer.unref) pollTimer.unref();
 
-        ui.onClick('BTN_RESET', guard(log, 'reset', () => { min = cur; max = cur; hist.length = 0; }));
 
         function details() {
             if (demoOn()) return 'demo data - no car link';
@@ -107,10 +121,8 @@ mgu.run({
             return (l.why || 'waiting for the diagnostic link') + (probes ? '   ' + probes : '');
         }
 
-        function render() {
-            const t = ctx.theme(), now = Date.now();
-            seenAt = now;
-            const cv = ctx.canvas(W, H).clear(t.bg);
+        /** Ethanol page: gauge, trend, status panel. */
+        function drawEthanol(cv, t) {
             const v = value(), lo = settings.get('bandLow'), hi = Math.max(settings.get('bandHigh'), lo + 5);
             const room = G.pageBottom(cv) - G.BOTTOM, half = Math.round(room / 2);
 
@@ -161,14 +173,8 @@ mgu.run({
             cv.text('AGE OF READING', 952, 414, 22, t.dim, { font: 'bold', spacing: 1.5 });
             cv.text(demoOn() ? 'demo' : ageS === null ? '--' : ageS + ' s', 1552, 416, 30, t.text, { align: 'right', font: 'bold' });
 
-            const dt = details();
-            cv.text(dt.length > 62 ? dt.slice(0, 61) + '..' : dt, 952, 470, 20, t.dim);
-
-            G.frame(cv, t, ['Ethanol'], 0, [demoOn() && { text: 'DEMO' }]);
-            return ui.image('MAIN_GFX', cv);
+            fitText(cv, details(), 952, 470, 20, t.dim, 600);
         }
-
-        ctx.loop('MAIN', 4, guard(log, 'draw', render));
 
         // ---------------- Fill-up calculator (BLEND)
         let tankAt = 0, tankBusy = false;
@@ -185,10 +191,6 @@ mgu.run({
             const j = Math.max(0, Math.min(list.length - 1, (i < 0 ? list.indexOf(it.default) : i) + dir));
             settings.set('blendTarget', list[j]);
         }
-        ui.onClick('BTN_TARGET_DOWN', guard(log, 'target down', () => stepTarget(-1)));
-        ui.onClick('BTN_TARGET_UP', guard(log, 'target up', () => stepTarget(1)));
-        ui.onClick('BTN_BLEND', guard(log, 'open fill-up', () => ui.open('BLEND')));
-        ui.onClick('BTN_DEBUG', guard(log, 'open debug', () => ui.open('DEBUG')));
 
         /** What the calculator works from: the car's readings where there are fresh ones, else Settings. */
         function blendInputs() {
@@ -209,10 +211,9 @@ mgu.run({
             };
         }
 
-        function renderBlend() {
-            const t = ctx.theme();
-            if (settings.get('fuelNow') === 'car' && Date.now() - tankAt > 10000) { tankAt = Date.now(); readTank(); }
-            const cv = ctx.canvas(W, H).clear(t.bg);
+        /** Fill-up page: what the calculation starts from (left) and how much of each to add (right). */
+        function drawFill(cv, t) {
+            if (settings.get('fuelNow') === 'car' && Date.now() - tankAt > 10000 && !dbg.running) { tankAt = Date.now(); readTank(); }
             const inp = blendInputs(), gal = settings.get('volumeUnit') !== 'l', unit = gal ? 'gal' : 'l';
             const vol = (l) => (gal ? Blend.gallons(l) : l).toFixed(1);
             const p = inp.nowL === null ? null : Blend.plan(inp);
@@ -234,7 +235,7 @@ mgu.run({
             G.panel(cv, t, 748, 44, 828, 468, null);
             cv.text('TARGET', 772, 100, 22, t.dim, { font: 'bold', spacing: 1.5 });
             cv.text('E' + inp.targetE, 1552, 108, 48, t.accent, { align: 'right', font: 'bold', literal: true });
-            fitText(cv, 'Target -5 / +5 below, or Settings > Fill-up target', 772, 132, 18, t.dim, 780);
+            fitText(cv, 'Target -5 / +5 in the bar below, or Settings > Fill-up target', 772, 132, 18, t.dim, 780);
             if (!p) {
                 cv.text('--', 772, 280, 72, t.dim, { font: 'bold', literal: true });
                 fitText(cv, 'Fuel in the tank unknown: ' + inp.lFrom, 772, 340, 22, t.warn, 780);
@@ -255,28 +256,69 @@ mgu.run({
                 fitText(cv, msg, 772, 440, 24, col, 780, { font: 'bold' });
                 fitText(cv, 'Range when full: E' + Math.round(p.lowE) + ' (all 93) to E' + Math.round(p.highE) + ' (all E85)', 772, 476, 18, t.dim, 780);
             }
-            G.frame(cv, t, ['Fill-up'], 0, [demoOn() && { text: 'DEMO' }]);
-            return ui.image('BLEND_GFX', cv);
         }
-        ctx.loop('BLEND', 2, guard(log, 'fill-up draw', renderBlend));
 
-        // ---------------- Debug page (DEBUG)
-        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe });
-        let dbgPage = 0;
-        ui.onClick('BTN_DEBUG_RUN', guard(log, 'debug run', () => {
+        // ---------------- pages, tabs and the bar's two page buttons
+        function runDebug() {
             if (dbg.running) return;
             dbgPage = 0;
             log.info('debug: run started');
             dbg.run().catch((e) => log.warn('debug run: ' + (e && e.message || e)));
-        }));
-        ui.onClick('BTN_DEBUG_PAGE', guard(log, 'debug page', () => { dbgPage++; }));
-
-        function renderDebug() {
-            const cv = ctx.canvas(W, H);
-            drawDebug(cv, ctx.theme(), dbg, dbgPage);
-            return ui.image('DEBUG_GFX', cv);
         }
-        ctx.loop('DEBUG', 4, guard(log, 'debug draw', renderDebug));
+        let dbgPage = 0;
+
+        const shown = {};
+        /** Set a bar button's text when it changed (ui.text pushes it to the HMI). */
+        function label(id, text) {
+            if (shown[id] === text) return;
+            shown[id] = text;
+            ui.text(id, text);
+        }
+        function labels() {
+            if (page === FILL) { label('BTN_ACTION', 'Target -5'); label('BTN_ACTION2', 'Target +5'); }
+            else if (page === DEBUG) {
+                label('BTN_ACTION', dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total : 'Run all requests');
+                label('BTN_ACTION2', 'More rows');
+            } else {
+                const src = settings.get('source') || 'auto';
+                label('BTN_ACTION', 'Reset min / max');
+                label('BTN_ACTION2', 'Source: ' + (src === 'auto' ? 'Auto' : src));
+            }
+        }
+        function openPage(i) {
+            if (!(i >= 0 && i < TABS.length)) return;
+            page = i;
+            log.info('page ' + TABS[page]);
+            labels();
+        }
+        ui.onClick('BTN_ACTION', guard(log, 'action', () => {
+            if (page === FILL) stepTarget(-1);
+            else if (page === DEBUG) runDebug();
+            else { min = cur; max = cur; hist.length = 0; }
+            labels();
+        }));
+        ui.onClick('BTN_ACTION2', guard(log, 'action 2', () => {
+            if (page === FILL) stepTarget(1);
+            else if (page === DEBUG) dbgPage++;
+            else settings.cycle('source');
+            labels();
+        }));
+        ui.onClick('BTN_PAGE', guard(log, 'next page', () => openPage((page + 1) % TABS.length)));
+        if (ctx.onTab) ctx.onTab((i) => { openPage(i); });
+
+        function render() {
+            const t = ctx.theme();
+            seenAt = Date.now();
+            const cv = ctx.canvas(W, H).clear(t.bg);
+            if (page === FILL) drawFill(cv, t);
+            else if (page === DEBUG) drawDebug(cv, t, dbg, dbgPage);
+            else drawEthanol(cv, t);
+            G.frame(cv, t, TABS, page, [demoOn() && { text: 'DEMO' }, page === DEBUG && dbg.running && { text: 'RUNNING' }]);
+            labels();
+            return ui.image('MAIN_GFX', cv);
+        }
+        ctx.loop('MAIN', 4, guard(log, 'draw', render));
+        labels();
 
         Promise.resolve(guard(log, 'first frame', render)()).then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));
     },

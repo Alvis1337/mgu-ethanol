@@ -2,7 +2,7 @@
   "id": "alvis_ethanol",
   "title": "Ethanol",
   "description": "Live ethanol content (E%) of the fuel, read from the engine unit: big gauge, target band, min / max and a 20 minute trend, a fill-up calculator (how much E85 and how much 93 to reach a target E%) and a debug page of read-only DME requests. Read-only.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "vendor": "custom",
   "loggingId": "OAE1",
   "iconGlyph": "E%",
@@ -23,28 +23,10 @@
       "kind": "canvas",
       "title": "Ethanol",
       "buttons": [
-        ["BTN_RESET", "Reset min / max"],
-        ["BTN_BLEND", "Fill-up calculator"],
-        ["BTN_DEBUG", "Debug"],
+        ["BTN_PAGE", "Next page"],
+        ["BTN_ACTION", "Reset min / max"],
+        ["BTN_ACTION2", "Source: Auto"],
         ["BTN_SETTINGS", "Settings"]
-      ]
-    },
-    {
-      "name": "BLEND",
-      "kind": "canvas",
-      "title": "Fill-up",
-      "buttons": [
-        ["BTN_TARGET_DOWN", "Target -5"],
-        ["BTN_TARGET_UP", "Target +5"]
-      ]
-    },
-    {
-      "name": "DEBUG",
-      "kind": "canvas",
-      "title": "Debug",
-      "buttons": [
-        ["BTN_DEBUG_RUN", "Run all requests"],
-        ["BTN_DEBUG_PAGE", "Next page"]
       ]
     }
   ],
@@ -54,7 +36,7 @@
     {"key": "bandHigh", "label": "Target band to", "type": "number", "unit": "%", "default": 50,
      "steps": [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100]},
     {"key": "source", "label": "Ethanol source", "type": "choice", "default": "auto",
-     "options": [["auto", "Auto (first that answers)"], ["F452", "F452 (OBD 52 via UDS)"], ["OBD 52", "OBD 01 PID 52"], ["550D", "550D (BMW alcohol in fuel)"]]},
+     "options": [["auto", "Auto (first that answers)"], ["550D", "550D (BMW alcohol in fuel)"], ["OBD 52", "OBD 01 PID 52"], ["F452", "F452 (OBD 52 via UDS)"]]},
     {"key": "blendTarget", "label": "Fill-up target", "type": "number", "unit": "% ethanol", "default": 40,
      "steps": [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85]},
     {"key": "e85Content", "label": "E85 at the pump is really", "type": "number", "unit": "% ethanol", "default": 85,
@@ -80,12 +62,12 @@
      "options": [["auto", "Auto (only without a car link)"], ["on", "Always"], ["off", "Never"]]}
   ],
   "config": {
-    "comment": "Ethanol content from the engine unit (DME, ecu 18 = 0x12), reads only. candidates are tried in order and the first plausible one wins (Settings > Ethanol source can pin one): did F452 = standard OBD PID 0x52 (ethanol fuel %) through UDS 22, obd 52 = the same PID with OBD service 01, did 550D = the BMW DME's PROZENT_ALK_KRST (alcohol in fuel, DME8FF_R). value = raw * factor + offset (raw 0..255 = 0..100 %). probe: identifiers that are only READ and shown on the details line and the Debug page (raw bytes), never used as the value - add a DID here to work out its scaling on the car. Add your own candidates here if the DME answers another BMW-specific DID.",
+    "comment": "Ethanol content from the engine unit (DME, ecu 18 = 0x12), reads only. candidates are tried in order and the first plausible one wins (Settings > Ethanol source can pin one): did 550D = the BMW DME's PROZENT_ALK_KRST (alcohol in fuel, DME8FF_R), obd 52 = standard OBD PID 0x52 (ethanol fuel %) with OBD service 01, did F452 = the same PID through UDS 22 (no reply on the first car tried, and an unanswered request keeps the head unit's transport busy for seconds, so it goes last). value = raw * factor + offset (raw 0..255 = 0..100 %). probe: identifiers that are only READ and shown on the details line and the Debug page (raw bytes), never used as the value - add a DID here to work out its scaling on the car. Add your own candidates here if the DME answers another BMW-specific DID.",
     "ecu": 18,
     "candidates": [
-      {"did": "F452", "bytes": 1, "at": 0, "factor": 0.39215686, "offset": 0, "min": 0, "max": 100},
+      {"did": "550D", "bytes": 1, "at": 0, "factor": 0.39215686, "offset": 0, "min": 0, "max": 100},
       {"obd": "52", "bytes": 1, "at": 0, "factor": 0.39215686, "offset": 0, "min": 0, "max": 100},
-      {"did": "550D", "bytes": 1, "at": 0, "factor": 0.39215686, "offset": 0, "min": 0, "max": 100}
+      {"did": "F452", "bytes": 1, "at": 0, "factor": 0.39215686, "offset": 0, "min": 0, "max": 100}
     ],
     "probe": []
   }

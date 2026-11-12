@@ -9,11 +9,13 @@
  *   const dbg = new Debug(link, log, { ecu: 0x12, extra: config.probe });
  *   dbg.run();          // in the background; dbg.rows fill in as answers arrive, dbg.running / dbg.done
  *
+ * When the DME gives no reply to several requests in a row (asleep: ignition off), the rest of its requests are
+ * skipped (each would wait timeoutMs and keep the transport busy) and the run goes on with the bus discovery.
+ *
  * A row: { group, label, req, state: 'wait' | 'ok' | 'nrc' | 'none' | 'error' | 'info', text }
  */
 const { hex, NRC } = require('./kit/diag');
 const { withAlpha } = require('./kit/canvas');
-const G = require('./kit/gauges');
 
 const pct = (b) => (b * 100 / 255).toFixed(1) + ' %';
 const ascii = (bytes) => bytes.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
@@ -79,6 +81,9 @@ const DME_TYPES = {
 ['0F2422', '0F2424', '0F2426', '0F2427', '0F2428', '0F2429', '0F242A', '0F242C', '0F242E', '0F2460', '0F25A0', '0F25A2',
     '0F26B4', '0F26B8', '0F26BC', '0F26E0', '0F26E4', '0F26E8', '0F2930'].forEach((k) => { DME_TYPES[k] = 'DME8FF_R (B58/S58 MG1)'; });
 
+/** An error as a short row text: the transport's refusals without their long prefix. */
+const errText = (e) => String(e && e.message || e).replace(/^transport refused: (APP_REQUEST_)?/, 'head unit refused: ');
+
 const label = (p) => (p.did != null ? '22 ' + hex(p.did, 4) : p.obd != null ? '01 ' + hex(p.obd) : '09 ' + hex(p.vin));
 
 class Debug {
@@ -86,7 +91,8 @@ class Debug {
         this.link = link;
         this.log = log;
         this.ecu = (opts && opts.ecu) || 0x12;
-        this.timeoutMs = (opts && opts.timeoutMs) || 1500;
+        this.timeoutMs = (opts && opts.timeoutMs) || 3000;
+        this.giveUpAfter = (opts && opts.giveUpAfter) || 4;     // no replies in a row before the DME is skipped
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
         this.probes = PROBES.concat(extra);
@@ -128,7 +134,7 @@ class Debug {
         const t0 = Date.now();
         let uds;
         try { uds = await this.link.physical(ecu, sid, data, this.timeoutMs, accept); } catch (e) {
-            row.state = 'error'; row.text = String(e && e.message || e); return row;
+            row.state = 'error'; row.text = errText(e); return row;
         }
         const ms = Date.now() - t0;
         if (!uds) { row.state = 'none'; row.text = 'no reply (' + ms + ' ms)'; return row; }
@@ -149,7 +155,7 @@ class Debug {
         this.rows.push(row);
         if (typeof this.link.discover !== 'function') { row.state = 'error'; row.text = 'link cannot discover'; return row; }
         let units;
-        try { units = await this.link.discover(this.discoverOpts); } catch (e) { row.state = 'error'; row.text = String(e && e.message || e); return row; }
+        try { units = await this.link.discover(this.discoverOpts); } catch (e) { row.state = 'error'; row.text = errText(e); return row; }
         if (!units || !units.size) { row.state = 'none'; row.text = 'no unit answered'; return row; }
         const addrs = Array.from(units.keys()).sort((a, b) => a - b);
         const dme = units.get(this.ecu);
@@ -180,10 +186,20 @@ class Debug {
                 lr.text = 'diagnostic link not ready' + (this.link.error ? ': ' + this.link.error : '') + ' - nothing sent';
                 return this.rows;
             }
-            for (const p of this.probes) {
-                const r = await this.probe(p);
+            let silentRun = 0;
+            for (let i = 0; i < this.probes.length; i++) {
+                const r = await this.probe(this.probes[i]);
                 this.done++;
                 this.log.info('debug ' + r.req + ' ' + r.label + ': ' + r.text);
+                silentRun = r.state === 'none' ? silentRun + 1 : 0;
+                if (silentRun >= this.giveUpAfter && i < this.probes.length - 1) {
+                    const left = this.probes.length - 1 - i;
+                    this.rows.push({ group: 'DME', label: 'Skipped ' + left + ' requests', req: '', state: 'error',
+                        text: 'DME gave no reply ' + silentRun + ' times in a row: engine off / asleep?' });
+                    this.log.info('debug: DME silent ' + silentRun + ' times in a row, ' + left + ' requests skipped');
+                    this.done += left;
+                    break;
+                }
             }
             const d = await this.discover();
             this.done++;
@@ -213,15 +229,14 @@ function fitText(cv, str, x, y, size, color, maxW, opts) {
 const GO = '#2fd27a';
 const PER_COL = 17;
 
-/** The Debug page: two columns of 17 rows (request, what it reads, the answer), page by page. */
+/** The Debug page's content (under the page's tab bar): two columns of 17 rows (request, what it reads, the answer). */
 function drawDebug(cv, t, dbg, pageNo) {
     const W = cv.w;
-    cv.clear(t.bg);
     const rows = dbg.rows.length ? dbg.rows : [dbg.linkRow()];
     const perPage = PER_COL * 2, pages = Math.max(1, Math.ceil(rows.length / perPage)), page = (pageNo || 0) % pages;
     const head = dbg.running ? 'Running ' + dbg.done + ' / ' + dbg.total + ' ...'
         : dbg.endedAt ? 'Done in ' + Math.round((dbg.endedAt - dbg.startedAt) / 1000) + ' s. Take a photo of each page.'
-            : 'Run all requests with the engine running (or ignition on). Read-only: nothing is written.';
+            : 'Start the engine, then press Run all requests. Read-only: nothing is written.';
     fitText(cv, head, 24, 74, 20, dbg.running ? t.accent : t.text, W - 260, { font: 'bold' });
     cv.text('Page ' + (page + 1) + ' / ' + pages, W - 24, 74, 20, t.dim, { align: 'right', font: 'bold', literal: true });
     const colW = Math.floor((W - 72) / 2);
@@ -233,7 +248,6 @@ function drawDebug(cv, t, dbg, pageNo) {
         fitText(cv, r.label, x + 100, y, 17, t.text, 250);
         fitText(cv, r.text, x + 358, y, 17, c, colW - 358);
     });
-    G.frame(cv, t, ['Debug'], 0, [dbg.running && { text: 'RUNNING' }]);
     return cv;
 }
 

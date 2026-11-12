@@ -107,8 +107,10 @@ module.exports = [
         assert.strictEqual(s.source, '550D');
         assert.strictEqual(Math.round(s.value), 50);
         assert.deepStrictEqual(link.calls.map((c) => c.data[0]), [0x55]);
-        r.source = 'nonsense';                                 // unknown: back to all of them, in order
+        r.source = 'F452';
         assert.strictEqual((await r.poll()).source, 'F452');
+        r.source = 'nonsense';                                 // unknown: back to all of them, in order (550D first)
+        assert.strictEqual((await r.poll()).source, '550D');
     }],
     ['tank: litres from 583B, else percent from OBD 2F, else why', async () => {
         let k = await new Reader(fake({ '22:583b': [0x62, 0x58, 0x3B, 0x24] }), cfg).tank();

@@ -12,9 +12,13 @@ Unofficial: nothing here is made, endorsed or supported by BMW AG. Install at yo
 - Status: in / above / below the band. Min and max since reset. 20-minute trend.
 - A details line: which identifier answered and its raw bytes, or why nothing did. If the DME stops answering
   (asleep, engine off) it is asked again every 10 seconds, so the number appears once the engine runs.
-- **Fill-up calculator**: how much E85 and how much 93 to add to fill the tank at a target E%.
-- **Debug page**: fires a list of read-only requests at the DME and shows what each one answered, to find out
+- **Fill-up** page: how much E85 and how much 93 to add to fill the tank at a target E%.
+- **Debug** page: fires a list of read-only requests at the DME and shows what each one answered, to find out
   what your car's DME supports.
+
+The three pages are tabs at the top (touch them, or turn the controller onto them); in the Standard layout
+**Next page** in the bar turns them. The bar's other two buttons do the page's jobs: Reset min / max and the ethanol
+source on Ethanol, Target -5 / +5 on Fill-up, Run all requests / More rows on Debug.
 - **Read only.** It asks the engine unit (DME, address 0x12) with UDS `22` and OBD `01` reads through the kit's
   read-only link (`kit/runtime/readonly-diag.js`), which refuses every other service. It never writes, codes or
   clears anything.
@@ -23,19 +27,21 @@ Unofficial: nothing here is made, endorsed or supported by BMW AG. Install at yo
 
 Tried in order, the first plausible answer wins (`config` in `apps/alvis_ethanol/app.json`):
 
-1. DID `F452` = standard OBD PID 0x52 (ethanol fuel %), through UDS 22; raw 0..255 = 0..100 %.
-2. OBD service 01, PID `52`.
-3. DID `550D` = the BMW DME's `PROZENT_ALK_KRST` ("percent alcohol in fuel", DME8FF_R: one byte, 0..255 = 0..100 %).
+1. DID `550D` = the BMW DME's `PROZENT_ALK_KRST` ("percent alcohol in fuel", DME8FF_R: one byte, 0..255 = 0..100 %).
+2. OBD service 01, PID `52` = standard OBD ethanol fuel %; raw 0..255 = 0..100 %.
+3. DID `F452` = the same PID through UDS 22. Last: on the first car tried it got no reply, and a request without a
+   reply keeps the head unit's diagnostic transport busy for seconds (the app then waits and sends again, up to 12 s).
 
 Which of them a DME answers on a given tune is not known in advance: run the Debug page to see. Once you know,
-**Settings -> Ethanol source** pins one of them instead of taking the first that answers. If none answers, the screen
+**Settings -> Ethanol source** (or the Source button on the Ethanol page) pins one of them instead of taking the
+first that answers. If none answers, the screen
 says NO DATA and the details line shows the refusal codes. `config.probe` lists extra identifiers that are only *read*
 (raw bytes on the details line and the Debug page); use it to work out the scaling of another BMW-specific identifier,
 then add it to `config.candidates`.
 
 ## Fill-up calculator
 
-**Fill-up calculator** on the main screen. Set the target with **Target -5 / +5** (or Settings -> Fill-up target);
+The **Fill-up** tab. Set the target with **Target -5 / +5** in the bar (or Settings -> Fill-up target);
 it shows how much E85 and how much 93 to add to fill the tank at that E%, and the lowest and highest E% a full tank can
 reach from where you are (all 93 / all E85).
 
@@ -53,11 +59,12 @@ good as the inputs: pump E85 varies, and a test kit or the car's own reading aft
 
 ## Debug page
 
-**Debug** on the main screen, then **Run all requests**, with the engine running (or at least the ignition on). It asks
+The **Debug** tab, then **Run all requests**, with the engine running (or at least the ignition on). It asks
 the DME for the VIN and its type (SGBD index), the three ethanol identifiers, fuel type, tank level, a few engine values
 and which OBD PIDs it claims to support, then which units are on the bus (22 F150 to all). Each row shows the request,
-what it reads, and the answer: green = a value (with the raw bytes), amber = refused (NRC), grey = no reply. The run
-takes up to about a minute and fits on one page; take a photo of it. Every row is also written to the app's log.
+what it reads, and the answer: green = a value (with the raw bytes), amber = refused (NRC) or turned away by the head
+unit, grey = no reply. After 4 requests in a row without a reply the DME is taken as asleep and its other requests are
+skipped (the bus is still asked). The run takes up to about a minute and fits on one page; take a photo of it. Every row is also written to the app's log.
 Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
 
 ## Install (MGU Store)
@@ -81,7 +88,7 @@ through `guard()` in `main.js` (the platform uninstalls an app that crashes).
 
 | Path | |
 | --- | --- |
-| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `icon.png` |
+| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `patient.js` (retry while the transport is busy), `icon.png` |
 | `kit/` | the MGU App Kit from [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT, see `kit/LICENSE`), vendored as the Store builds from it |
 | `test/` | unit tests (`test/run.js`) |
 | `mgu-repo.json` | what the Store reads |
