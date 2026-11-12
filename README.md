@@ -48,7 +48,8 @@ reach from where you are (all 93 / all E85).
 It works from:
 
 - **Ethanol now**: the live reading, else Settings -> Ethanol now, when not read.
-- **Fuel in the tank**: read from the DME (`583B`, litres; else OBD PID `2F`, % of the tank), or set by hand in
+- **Fuel in the tank**: the instrument cluster's fuel level signal (litres), else read from the DME (`583B`, litres;
+  else OBD PID `2F`, % of the tank), or set by hand in
   Settings -> Fuel in the tank now (1/8 steps).
 - **Tank size**: Settings (default 59 l / 15.6 gal).
 - **E85 at the pump is really** (default 85; summer / winter E85 is often 70-83 %) and **93 at the pump has**
@@ -64,7 +65,11 @@ the DME for the VIN and its type (SGBD index), the three ethanol identifiers, fu
 and which OBD PIDs it claims to support, then which units are on the bus (22 F150 to all). Each row shows the request,
 what it reads, and the answer: green = a value (with the raw bytes), amber = refused (NRC) or turned away by the head
 unit, grey = no reply. After 4 requests in a row without a reply the DME is taken as asleep and its other requests are
-skipped (the bus is still asked). The run takes up to about a minute and fits on one page; take a photo of it. Every row is also written to the app's log.
+skipped (the bus is still asked). The page also shows the engine state and the fuel level from the car's own signals,
+and what the head unit's diagnostic transport said: how many requests it took and with which verdict, how many
+responses came back, from which unit, transport errors and rejects, and the raw bytes of the last ones (the kit drops
+anything that is not a reply silently; `tap.js` counts it without changing it). The run takes up to about a minute;
+take a photo of each page (More rows). Every row is also written to the app's log.
 Everything is a read (UDS 22, OBD 01 / 09) through `kit/runtime/readonly-diag.js`.
 
 ## Install (MGU Store)
@@ -88,7 +93,7 @@ through `guard()` in `main.js` (the platform uninstalls an app that crashes).
 
 | Path | |
 | --- | --- |
-| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `patient.js` (retry while the transport is busy), `icon.png` |
+| `apps/alvis_ethanol/` | the app: `app.json`, `main.js` (screens), `reader.js` (the DME read), `blend.js` (fill-up maths), `debug.js` (Debug page), `patient.js` (retry while the transport is busy), `tap.js` (what the transport said), `icon.png` |
 | `kit/` | the MGU App Kit from [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT, see `kit/LICENSE`), vendored as the Store builds from it |
 | `test/` | unit tests (`test/run.js`) |
 | `mgu-repo.json` | what the Store reads |

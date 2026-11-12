@@ -108,7 +108,7 @@ module.exports = [
         const d = new Debug(link, quiet, { ecu: 0x12 });
         const rows = await d.run();
         assert.strictEqual(link.calls.length, 0);
-        assert.strictEqual(rows.length, 1);
+        assert.strictEqual(rows.length, 3, 'the link row and the two car signal rows');
         assert.ok(/not ready: TASU unavailable/.test(rows[0].text));
     }],
     ['a request the link throws on is shown as an error and the run goes on', async () => {
@@ -117,8 +117,32 @@ module.exports = [
         const phys = link.physical.bind(link);
         link.physical = function () { if (n++ === 0) return Promise.reject(new Error('transport refused: APP_REQUEST_TEMPORARILY_NOT_ACCEPTED')); return phys.apply(null, arguments); };
         const rows = await new Debug(link, quiet, { ecu: 0x12 }).run();
-        assert.strictEqual(rows[1].state, 'error');
-        assert.strictEqual(rows[1].text, 'head unit refused: TEMPORARILY_NOT_ACCEPTED');
+        const first = rows.filter((r) => r.req === '22 F190')[0];      // the first request (after the link and car rows)
+        assert.strictEqual(first.state, 'error');
+        assert.strictEqual(first.text, 'head unit refused: TEMPORARILY_NOT_ACCEPTED');
         assert.strictEqual(link.calls.length, PROBES.length - 1);
+    }],
+    ['car signal rows: engine and cluster fuel level, or that none came', async () => {
+        let car = { engine: 'running', tankL: 41 };
+        const d = new Debug(fakeLink({}, null, true), quiet, { ecu: 0x12, car: () => car });
+        let rows = await d.run();
+        assert.strictEqual(rows[1].text, 'running'); assert.strictEqual(rows[1].state, 'ok');
+        assert.strictEqual(rows[2].text, '41 l');
+        car = { engine: 'off', tankL: null };
+        rows = await d.run();
+        assert.ok(/off: the DME may not answer/.test(rows[1].text));
+        assert.strictEqual(rows[2].text, 'no signal yet');
+    }],
+    ['transport rows: what the head unit took and what came back', async () => {
+        const tap = { requests: 3, verdicts: { NO_ERROR: 3 }, callErrors: {}, responses: 2, frames: { 40: 1 }, errors: { TIMEOUT: 1 }, rejects: {}, short: 0,
+            last: [{ kind: 'error TIMEOUT', bytes: '' }, { kind: 'from 40', bytes: '00 00 00 00 00 00 40 00 00 62 F1 90' }], firstVerdict: '{"TasuErrorEnum":"NO_ERROR"}' };
+        const rows = await new Debug(fakeLink({}, null, true), quiet, { ecu: 0x12, tap }).run();
+        const tr = rows.filter((r) => r.group === 'Transport');
+        assert.strictEqual(tr[0].text, '3 requests: NO_ERROR 3');
+        assert.strictEqual(tr[1].text, '2: from 40 1');
+        assert.strictEqual(tr[2].text, 'TIMEOUT 1');
+        assert.strictEqual(tr[3].text, 'none');
+        assert.ok(/^from 40: 00 00/.test(tr[5].text));
+        assert.ok(/TasuErrorEnum/.test(tr[tr.length - 1].text));
     }],
 ];

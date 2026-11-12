@@ -6,7 +6,8 @@
  * Everything goes through the app's ReadOnlyDiag (kit/readonly-diag.js): UDS 22 (read data by identifier),
  * OBD 01 / 09 (current data / vehicle information) and 22 F1 50 to all units. Nothing is written or coded.
  *
- *   const dbg = new Debug(link, log, { ecu: 0x12, extra: config.probe });
+ *   const dbg = new Debug(link, log, { ecu: 0x12, extra: config.probe, tap: tap.stats, car: () => car });
+ *   (tap: what the transport said, tap.js; car(): { engine, tankL } from the car's own signals)
  *   dbg.run();          // in the background; dbg.rows fill in as answers arrive, dbg.running / dbg.done
  *
  * When the DME gives no reply to several requests in a row (asleep: ignition off), the rest of its requests are
@@ -16,6 +17,7 @@
  */
 const { hex, NRC } = require('./kit/diag');
 const { withAlpha } = require('./kit/canvas');
+const { tally } = require('./tap');
 
 const pct = (b) => (b * 100 / 255).toFixed(1) + ' %';
 const ascii = (bytes) => bytes.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
@@ -93,6 +95,8 @@ class Debug {
         this.ecu = (opts && opts.ecu) || 0x12;
         this.timeoutMs = (opts && opts.timeoutMs) || 3000;
         this.giveUpAfter = (opts && opts.giveUpAfter) || 4;     // no replies in a row before the DME is skipped
+        this.tap = (opts && opts.tap) || null;
+        this.car = (opts && opts.car) || (() => ({}));
         this.discoverOpts = (opts && opts.discover) || { idleMs: 3000, maxMs: 15000 };
         const extra = ((opts && opts.extra) || []).filter((c) => c && c.did).map((c) => ['Your probes', 'config.probe ' + c.did, { did: parseInt(c.did, 16), decode: (b) => b.length + ' bytes' }]);
         this.probes = PROBES.concat(extra);
@@ -111,6 +115,32 @@ class Debug {
         const l = this.link, yes = (b) => (b ? 'yes' : 'no');
         const text = 'ready ' + yes(l.ready) + ', available ' + yes(l.available) + (l.error ? ', ' + l.error : '');
         return { group: 'Link', label: 'Diagnostic link', req: '', state: l.ready ? 'info' : 'error', text };
+    }
+
+    /** The engine and the fuel level as the car's own signals give them (no diagnostic request). */
+    carRows() {
+        const c = this.car() || {};
+        const eng = c.engine == null ? 'no signal yet' : c.engine;
+        return [
+            { group: 'Car', label: 'Engine (car signal)', req: 'CDS', state: c.engine === 'running' ? 'ok' : c.engine == null ? 'none' : 'error',
+                text: eng + (c.engine === 'running' ? '' : c.engine == null ? '' : ': the DME may not answer') },
+            { group: 'Car', label: 'Fuel level (cluster)', req: 'KombiIF', state: c.tankL == null ? 'none' : 'ok',
+                text: c.tankL == null ? 'no signal yet' : c.tankL + ' l' },
+        ];
+    }
+
+    /** What the transport said since the app started (tap.js), as rows. */
+    transportRows() {
+        const t = this.tap;
+        if (!t) return [];
+        const rows = [
+            { label: 'Head unit took', text: t.requests + ' requests: ' + tally(t.verdicts) + (Object.keys(t.callErrors).length ? ' | call errors: ' + tally(t.callErrors) : '') },
+            { label: 'Responses heard', text: t.responses + (t.responses ? ': ' + (Object.keys(t.frames).length ? 'from ' + tally(t.frames) : 'no replies from a unit') : ' - nothing came back from the head unit') },
+            { label: 'Transport errors', text: tally(t.errors) },
+            { label: 'Transport rejects', text: tally(t.rejects) + (t.short ? ', short frames ' + t.short : '') },
+        ].concat(t.last.map((x, i) => ({ label: 'Response -' + (t.last.length - i), text: x.kind + ': ' + x.bytes })));
+        if (t.firstVerdict) rows.push({ label: 'First verdict (raw)', text: t.firstVerdict });
+        return rows.map((r) => Object.assign({ group: 'Transport', req: 'TASU', state: 'info' }, r));
     }
 
     /** What the link has counted since the app started, as a row. */
@@ -181,9 +211,11 @@ class Debug {
         try {
             const lr = this.linkRow();
             this.rows.push(lr);
+            this.carRows().forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
             if (!this.link.ready) {
                 lr.state = 'error';
                 lr.text = 'diagnostic link not ready' + (this.link.error ? ': ' + this.link.error : '') + ' - nothing sent';
+                this.transportRows().forEach((r) => this.rows.push(r));
                 return this.rows;
             }
             let silentRun = 0;
@@ -195,7 +227,7 @@ class Debug {
                 if (silentRun >= this.giveUpAfter && i < this.probes.length - 1) {
                     const left = this.probes.length - 1 - i;
                     this.rows.push({ group: 'DME', label: 'Skipped ' + left + ' requests', req: '', state: 'error',
-                        text: 'DME gave no reply ' + silentRun + ' times in a row: engine off / asleep?' });
+                        text: 'DME gave no reply ' + silentRun + ' times in a row' + ((this.car() || {}).engine === 'running' ? ' with the engine running: see Transport' : ': engine off / asleep?') });
                     this.log.info('debug: DME silent ' + silentRun + ' times in a row, ' + left + ' requests skipped');
                     this.done += left;
                     break;
@@ -207,6 +239,7 @@ class Debug {
             const end = this.statsRow();
             this.rows.push(end);
             this.log.info('debug link: ' + this.linkRow().text + ' | ' + end.text);
+            this.transportRows().forEach((r) => { this.rows.push(r); this.log.info('debug ' + r.label + ': ' + r.text); });
         } finally {
             this.running = false;
             this.endedAt = Date.now();

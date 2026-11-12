@@ -24,12 +24,15 @@ const Reader = require('./reader');
 const Blend = require('./blend');
 const { Debug, drawDebug, fitText } = require('./debug');
 const { patient } = require('./patient');
+const { tapSignals } = require('./tap');
 
 const W = 1600, H = 520;
 const GO = '#2fd27a';
 const HIST_MS = 20 * 60 * 1000;
 const TABS = ['Ethanol', 'Fill-up', 'Debug'];
 const ETHANOL = 0, FILL = 1, DEBUG = 2;
+// statusEngineStatus.statusEngineRunDrive (as the upstream Live Data app reads it)
+const ENGINE = { MOTOR_AUS: 'off', MOTOR_STARTET: 'starting', MOTOR_LAEUFT: 'running', 0: 'off', 1: 'starting', 2: 'running' };
 
 const mono = () => { const h = process.hrtime(); return h[0] * 1000 + h[1] / 1e6; };
 
@@ -46,8 +49,10 @@ const guard = (log, name, fn) => function () {
 mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        // the read-only link, tried again while the head unit's transport is busy (patient.js)
-        const link = patient(new ReadOnlyDiag(ctx.signals, log));
+        // the read-only link, tried again while the head unit's transport is busy (patient.js), over signals that
+        // count what the transport says for the Debug page (tap.js: everything passes unchanged)
+        const tap = tapSignals(ctx.signals);
+        const link = patient(new ReadOnlyDiag(tap.signals, log));
         const reader = new Reader(link, (ctx.spec && ctx.spec.config) || {});
         // connect in the background: the screen must not wait for the diagnostic link
         link.init().catch((e) => { log.warn('diagnostic link: ' + (e && e.message || e)); });
@@ -58,7 +63,23 @@ mgu.run({
         let lastHist = 0, seenAt = 0, busy = false, lastWhy = '', pollTimer = null;
         let demoMode = null;                        // whether min / max / trend hold demo or real values
         let page = ETHANOL;
-        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe });
+        // the car's own signals (no diagnostic request): engine state, and the fuel level from the instrument cluster
+        const car = { engine: null, tankL: null, tankAt: 0 };
+        ctx.signals.watch('de.bmw.infotainment.vehicle.CDS', '1', {
+            statusEngineStatus: (v) => {
+                const st = v && v.statusEngineRunDrive;
+                const e = ENGINE[st] !== undefined ? ENGINE[st] : String(st);
+                if (e !== car.engine) log.info('engine: ' + e + ' (' + st + ')');
+                car.engine = e;
+            },
+        }, log).then((r) => { if (r.error) log.warn('engine signal: ' + r.error); }).catch((e) => log.warn('engine signal: ' + e));
+        ctx.signals.watch('de.bmw.infotainment.KombiIF', '1', {
+            statusRangeTankStatus: (v) => {
+                const l = v && v.fluidLevelFuelTank;
+                if (typeof l === 'number' && l >= 0 && l < 255) { car.tankL = l; car.tankAt = Date.now(); }
+            },
+        }, log).then((r) => { if (r.error) log.warn('fuel level signal: ' + r.error); }).catch((e) => log.warn('fuel level signal: ' + e));
+        const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, car: () => car });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
         const demoValue = () => 38 + 9 * Math.sin(Date.now() / 9000) + 2 * Math.sin(Date.now() / 1700);
@@ -201,6 +222,7 @@ mgu.run({
             let nowL = null, lFrom;
             const fn = settings.get('fuelNow'), k = reader.lastTank, fresh = k.at && Date.now() - k.at < 2 * 60 * 1000;
             if (fn !== 'car') { nowL = Number(fn) * tankL; lFrom = 'from Settings'; }
+            else if (car.tankL !== null && !demoOn()) { nowL = Math.min(tankL, car.tankL); lFrom = 'read from the car (instrument cluster)'; }
             else if (fresh && k.litres !== null) { nowL = Math.min(tankL, k.litres); lFrom = 'read from the car (' + k.source + ')'; }
             else if (fresh && k.pct !== null) { nowL = k.pct / 100 * tankL; lFrom = 'read from the car (' + k.source + ', ' + Math.round(k.pct) + ' % of the tank)'; }
             else if (demoOn()) lFrom = 'no car link: set Fuel in the tank now in Settings';
@@ -213,7 +235,8 @@ mgu.run({
 
         /** Fill-up page: what the calculation starts from (left) and how much of each to add (right). */
         function drawFill(cv, t) {
-            if (settings.get('fuelNow') === 'car' && Date.now() - tankAt > 10000 && !dbg.running) { tankAt = Date.now(); readTank(); }
+            // the DME's tank level only where the cluster's fuel level signal has not come
+            if (settings.get('fuelNow') === 'car' && car.tankL === null && Date.now() - tankAt > 10000 && !dbg.running) { tankAt = Date.now(); readTank(); }
             const inp = blendInputs(), gal = settings.get('volumeUnit') !== 'l', unit = gal ? 'gal' : 'l';
             const vol = (l) => (gal ? Blend.gallons(l) : l).toFixed(1);
             const p = inp.nowL === null ? null : Blend.plan(inp);
