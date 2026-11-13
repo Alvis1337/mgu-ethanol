@@ -25,6 +25,7 @@ const Blend = require('./blend');
 const { Debug, drawDebug, fitText } = require('./debug');
 const { patient } = require('./patient');
 const { tapSignals } = require('./tap');
+const { ClusterScan } = require('./cluster');
 
 const W = 1600, H = 520;
 const GO = '#2fd27a';
@@ -105,6 +106,8 @@ mgu.run({
                 return ctx.signals.on(tap.proxy, name, (v) => { tap.trace('<', name + ' ' + JSON.stringify(v).slice(0, 200)); tap.hear(v); }, log);
             },
         };
+        // the cluster scan (cluster.js): started by a file in the data folder, the DME is not asked meanwhile
+        const scan = new ClusterScan(link, log, { dir: ctx.dataDir });
         const dbg = new Debug(link, log, { ecu: reader.cfg.ecu, extra: reader.cfg.probe, tap: tap.stats, tapSince: tap.since, car: () => car, ext });
 
         const demoOn = () => settings.get('demo') === 'on' || (settings.get('demo') === 'auto' && !link.available);
@@ -167,7 +170,7 @@ mgu.run({
         // 4 s, and only every 10 min once it failed GIVE_UP rounds in a row (back to every 4 s when it answers): each
         // unanswered request holds the head unit's transport 5-8 s (other apps' requests are turned away meanwhile)
         pollTimer = setInterval(guard(log, 'poll', () => {
-            if (dbg.running || busy) return undefined;
+            if (dbg.running || busy || scan.running) return undefined;
             if (settings.get('source') === 'manual' && !demoOn()) return undefined;
             const every = misses >= GIVE_UP ? RETRY_MS : 4000;
             if (Date.now() - lastPoll < every) return undefined;
@@ -180,6 +183,8 @@ mgu.run({
             });
         }), 1000);
         if (pollTimer && pollTimer.unref) pollTimer.unref();
+        const scanTimer = setInterval(guard(log, 'cluster scan', () => (dbg.running || busy || !link.ready ? undefined : scan.poll())), 3000);
+        if (scanTimer && scanTimer.unref) scanTimer.unref();
 
 
         function details() {
