@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EthanolApp.xml - the menu row and one screen for the Ethanol app on NBT Evo (iDrive 6).
+
+  Modeled on the reference gauge app's GaugeApp.xml: a PluginApp screen whose labels bind to raDataModel
+  rows that qnx_binding.cpp fills (setModelText rowId -> text). The row ids here MUST match the ids in
+  EthanolApp::refresh().
+
+  [RECONCILE] the element/attribute names (<PluginApp>, <Screen>, <Label>, binding="raDataModel.*") are
+  taken from the gauge app's README description, not a schema. Confirm against a working GaugeApp.xml before
+  trusting the exact tag names; the structure (one menu row, one screen, N bound labels) is the contract.
+-->
+<PluginApp id="AlvisEthanol" title="Ethanol">
+
+  <!-- the row that appears under Media/Radio (like the gauge app's "Engine Data") -->
+  <MenuEntry id="menuEthanol" title="Ethanol" icon="ethanol_icon" screen="screenEthanol"/>
+
+  <Screen id="screenEthanol" title="Ethanol">
+
+    <Label id="lblEthanol"  caption="Ethanol"     binding="raDataModel.rowEthanol"/>
+    <Label id="lblSource"   caption="Source"      binding="raDataModel.rowSource"/>
+    <Label id="lblFuel"     caption="In tank"     binding="raDataModel.rowFuel"/>
+
+    <Separator/>
+
+    <Label id="lblAddE85"   caption="Add E85"     binding="raDataModel.rowAddE85"/>
+    <Label id="lblAddPump"  caption="Add pump"    binding="raDataModel.rowAddPump"/>
+    <Label id="lblResult"   caption="Result"      binding="raDataModel.rowResult"/>
+    <Label id="lblNote"     caption=""            binding="raDataModel.rowNote"/>
+
+    <!--
+      Settings (target %, E85 %, pump %, tank size, manual %, manual on/off) drive the fill-up math.
+      [RECONCILE] NBT Evo input widgets differ from MGU; until a stepper/selector widget is wired, these
+      live as defaults in qnx_binding.cpp State and can be edited by rebuilding. Wiring real on-screen
+      steppers is the follow-up once the base app loads on the car.
+    -->
+  </Screen>
+</PluginApp>

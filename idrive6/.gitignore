@@ -1,0 +1,6 @@
+run_tests
+libEthanolApp.so
+data_out/
+lib/
+__pycache__/
+*.o

@@ -1,0 +1,16 @@
+# EthanolApp.manifest - read by CAppManager on NBT Evo to register the plugin.
+# [RECONCILE] key names/format against a working GaugeApp.manifest from the car; values below are the
+# intended contract (id, library, entry screen, the one menu row).
+
+id            = AlvisEthanol
+name          = Ethanol
+version       = 0.1.0-idrive6
+library       = libEthanolApp.so
+factory       = createPluginApp
+xml           = EthanolApp.xml
+entryScreen   = screenEthanol
+menuEntry     = menuEthanol
+
+# requires one of these coding options enabled, or HmiMain3D will not load PluginApps:
+#   A4A, A4A_REMOTE_APPS, REMOTE_HMI, TOUCH_COMMAND
+requiresCoding = A4A | A4A_REMOTE_APPS | REMOTE_HMI | TOUCH_COMMAND
