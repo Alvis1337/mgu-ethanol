@@ -3,6 +3,9 @@
 #include "../src/blend.hpp"
 #include "../src/fuel.hpp"
 #include "../src/app_core.hpp"
+#include "../src/cds_text.hpp"
+#include "../src/config.hpp"
+#include <cstring>
 
 using namespace ethanol;
 
@@ -122,9 +125,70 @@ static void test_app() {
     chk::eqs(render(full).note, "Tank full - nothing to add", "full note");
 }
 
+static void test_cds_text() {
+    std::printf("cds_text:\n");
+    const char* fuel = "{\"fuel\":{\"range\":522,\"reserve\":0,\"tanklevel\":39}}";
+    double v = 0;
+    chk::ok(numField(fuel, "tanklevel", &v) && v == 39.0, "tanklevel parsed = 39");
+    chk::ok(numField(fuel, "range", &v) && v == 522.0, "range parsed = 522");
+    chk::ok(!numField(fuel, "ethanol", &v), "missing key -> false");
+    chk::ok(!numField("{\"temperatureExterior\":null}", "temperatureExterior", &v), "null value -> false");
+    chk::ok(numField("{\"temperatureExterior\":14.0}", "temperatureExterior", &v) && v == 14.0, "decimal parsed");
+    chk::ok(numField("{\"engine\":-7}", "engine", &v) && v == -7.0, "negative parsed");
+
+    // UTF-16 in (as the car delivers) -> ASCII out
+    unsigned short wide[8]; wide[0] = '3'; wide[1] = '9'; wide[2] = ' '; wide[3] = 'l'; wide[4] = 0;
+    char out[16]; size_t n = narrow(wide, out, sizeof(out));
+    chk::ok(n == 4 && std::strcmp(out, "39 l") == 0, "narrow UTF-16 -> ASCII");
+
+    // utf8 -> utf16 -> narrow round trip (ASCII subset)
+    unsigned short w2[32]; utf8to16("50 %", w2, 32);
+    char back[16]; narrow(w2, back, sizeof(back));
+    chk::ok(std::strcmp(back, "50 %") == 0, "utf8->utf16->ascii round trip");
+}
+
+static void test_config() {
+    std::printf("config:\n");
+    const char* cfg =
+        "# my settings\n"
+        "ethanol = 72\n"
+        "target=50\n"
+        "e85 = 83   # summer blend\n"
+        "pump=10\n"
+        "tank = 65\n"
+        "\n"
+        "bogus = 1\n";
+    Settings s;
+    int applied = parseConfig(cfg, s);
+    chk::ok(applied == 5, "5 recognized keys applied");
+    chk::near(s.manualE, 72.0, 1e-9, "ethanol = 72");
+    chk::ok(s.hasEthanol, "hasEthanol set");
+    chk::near(s.targetE, 50.0, 1e-9, "target = 50");
+    chk::near(s.e85, 83.0, 1e-9, "e85 = 83 (comment stripped)");
+    chk::near(s.pump, 10.0, 1e-9, "pump = 10");
+    chk::near(s.tankCapacityL, 65.0, 1e-9, "tank = 65");
+
+    // defaults when the file is empty / missing
+    Settings d;
+    chk::ok(parseConfig("", d) == 0 && !d.hasEthanol, "empty -> defaults, no ethanol");
+    chk::near(d.tankCapacityL, 65.0, 1e-9, "default tank 65");
+
+    // garbage ethanol value is not applied
+    Settings g;
+    parseConfig("ethanol = full\n", g);
+    chk::ok(!g.hasEthanol, "non-numeric ethanol ignored");
+
+    // manual=0 turns manual mode off
+    Settings m;
+    parseConfig("manual=0\n", m);
+    chk::ok(!m.manualMode, "manual=0 -> off");
+}
+
 int main() {
     test_blend();
     test_fuel();
     test_app();
+    test_cds_text();
+    test_config();
     return chk::report();
 }

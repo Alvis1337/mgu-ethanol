@@ -1,0 +1,38 @@
+PolyForm Noncommercial License 1.0.0
+====================================
+
+This idrive6/ subtree is licensed under the PolyForm Noncommercial License 1.0.0.
+
+  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+  Canonical text: https://polyformproject.org/licenses/noncommercial/1.0.0/
+
+In short (the canonical text above governs): you may use, modify and share this
+for any purpose EXCEPT a commercial one. Personal use on your own vehicle, and
+sharing with friends, is fine. Selling it, or using it as part of a paid product
+or service, is not.
+
+Copyright (c) 2026 the repository owner.
+
+-----------------------------------------------------------------------------
+Why this subtree is licensed differently from the rest of the repository
+-----------------------------------------------------------------------------
+
+The rest of this repository (the MGU / iDrive 7 app) is public domain (The
+Unlicense). This idrive6/ subtree is NOT, because its NBT Evo framework binding
+is a derivative work of reverse-engineering published under the PolyForm
+Noncommercial License, and must keep a compatible license:
+
+  * MGD4096/IDRIVE_GAUGE_APP        - the native NBT Evo PluginApp this is modeled
+    (https://github.com/MGD4096/IDRIVE_GAUGE_APP)   on; framework glue, host-test
+                                                    harness, data-build and XML/
+                                                    manifest patterns derive from it.
+                                                    PolyForm-Noncommercial-1.0.0.
+
+  * Sq00ky/Supra-iDrive6-Android-Auto (NBT-AAD) - the project IDRIVE_GAUGE_APP in
+    (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)  turn derives its RHMI
+                                                            PluginApp pattern from.
+
+The pure logic in src/blend.hpp, src/fuel.hpp and src/app_core.hpp is original
+work ported from this repository's own MGU app and is also available from there
+under The Unlicense; within this subtree it is distributed under the license above
+for simplicity.

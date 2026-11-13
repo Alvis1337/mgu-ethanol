@@ -31,6 +31,9 @@ struct Inputs {
     Inputs() : manualMode(false), manualE(0), tankCapacityL(0), targetE(50), e85(85), pump(10) {}
 };
 
+// The screen has this many label rows (raDataModel ids 21..27); one per Labels field below.
+enum { kRowCount = 7 };
+
 // One string per label the XML binds (raDataModel rows).
 struct Labels {
     std::string ethanol;    // "72 %" / "--"

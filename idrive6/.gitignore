@@ -1,6 +1,11 @@
 run_tests
 libEthanolApp.so
+EthanolApp_ALL_Texts.zip
+EthanolApp_ALL_Images.zip
+res/
 data_out/
 lib/
+tests/build/
+nbt-ethanol-test.cfg
 __pycache__/
 *.o

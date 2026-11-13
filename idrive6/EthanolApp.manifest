@@ -1,16 +1,25 @@
-# EthanolApp.manifest - read by CAppManager on NBT Evo to register the plugin.
-# [RECONCILE] key names/format against a working GaugeApp.manifest from the car; values below are the
-# intended contract (id, library, entry screen, the one menu row).
-
-id            = AlvisEthanol
-name          = Ethanol
-version       = 0.1.0-idrive6
-library       = libEthanolApp.so
-factory       = createPluginApp
-xml           = EthanolApp.xml
-entryScreen   = screenEthanol
-menuEntry     = menuEthanol
-
-# requires one of these coding options enabled, or HmiMain3D will not load PluginApps:
-#   A4A, A4A_REMOTE_APPS, REMOTE_HMI, TOUCH_COMMAND
-requiresCoding = A4A | A4A_REMOTE_APPS | REMOTE_HMI | TOUCH_COMMAND
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+     Read by CAppManager on NBT Evo. Structure follows MGD4096/IDRIVE_GAUGE_APP's GaugeApp.manifest; see
+     idrive6/LICENSE. Install the folder as Plugins/EthanolApp with EthanolApp (the .so), this file, the XML
+     and the two zips. -->
+<plugin>
+	<name>EthanolApp</name>
+	<type>App</type>
+	<file>{pluginDir}/EthanolApp</file>
+	<config>
+		<autoStart>yes</autoStart>
+		<dependencies>
+			<pluginAppConnector>
+				<type>Etch</type>
+				<id>211</id>
+				<asyncCallbacks>yes</asyncCallbacks>
+			</pluginAppConnector>
+		</dependencies>
+		<parameters>
+			<DescFile>{pluginDir}/EthanolApp.xml</DescFile>
+			<TextDBFile>{pluginDir}/EthanolApp_ALL_Texts.zip</TextDBFile>
+			<ImageDBFile>{pluginDir}/EthanolApp_ALL_Images.zip</ImageDBFile>
+		</parameters>
+	</config>
+</plugin>

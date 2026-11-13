@@ -1,42 +1,39 @@
-# Makefile - build the Ethanol app for NBT Evo, and run host tests off the car.
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Ethanol PluginApp for BMW NBT Evo (ID5/ID6). Build layout follows MGD4096/IDRIVE_GAUGE_APP; see idrive6/LICENSE.
 #
-#   make check      compile + run the pure-logic host tests (plain g++, no QNX, no car). Do this first.
-#   make db         build the text/image data (python3 + Pillow)
-#   make            cross-compile libEthanolApp.so for the unit (needs QNX SDP 6.5 + framework libs)
+#   make check      host tests (pure logic + dlopen integration) with Linux g++ - no QNX, no car. Do this first.
+#   make db         build the text/image DBs (python3 + Pillow)
+#   make            cross-compile libEthanolApp.so for the unit (needs QNX SDP 6.5 + the car's framework libs)
 #   make clean
 #
-# The host tests cover everything that does not touch the car (blend, fuel, app_core). The car build needs
-# the QNX toolchain and the two framework libraries copied off the unit into ./lib (see README).
+# RHMI_LIBDIR must hold copies of the car's libAppFramework.A.so and libCoreFramework.A.so (opt/hmi/ID5/lib in a
+# firmware dump). They are BMW's files, not part of this project; copy them from your own head unit.
 
-# ---- host tests (run anywhere) ----
-HOST_CXX  ?= g++
-HOST_FLAGS = -std=gnu++98 -Wall -Wextra -O0 -g
+QCC ?= qcc
+RHMI_LIBDIR ?= ./lib
+RHMI_LIBS = $(wildcard $(RHMI_LIBDIR)/libAppFramework.A.so $(RHMI_LIBDIR)/libCoreFramework.A.so)
 
-.PHONY: check
-check:
-	$(HOST_CXX) $(HOST_FLAGS) -o run_tests tests/run_tests.cpp
-	./run_tests
+PLUGIN_CXX      = $(QCC) -Vgcc_ntoarmv7le_gpp
+PLUGIN_CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp -fPIC -I./src
 
-# ---- data build ----
-.PHONY: db
+.PHONY: all lib db check clean
+all: lib db
+
+lib: libEthanolApp.so
+
+libEthanolApp.so: src/qnx_binding.cpp src/*.hpp
+	@test -n "$(RHMI_LIBS)" || { echo "put libAppFramework.A.so and libCoreFramework.A.so from the car into $(RHMI_LIBDIR) (or set RHMI_LIBDIR)"; exit 1; }
+	@echo [BUILD] $@
+	$(PLUGIN_CXX) $(PLUGIN_CXXFLAGS) -shared -Wl,-soname,libEthanolApp.so -o $@ src/qnx_binding.cpp $(RHMI_LIBS) -Wl,--allow-shlib-undefined -lang-c++
+	@echo [DONE] $@ - install with EthanolApp.manifest, EthanolApp.xml and the two zips into Plugins/EthanolApp
+
 db:
 	python3 make_db.py
 
-# ---- car build (QNX SDP 6.5) ----
-# Pull libAppFramework.A.so and libCoreFramework.A.so off the unit (/opt/hmi/ID5/lib) into ./lib first.
-QCC      ?= qcc
-QCC_TGT  ?= -V4.4.2,gcc_ntoarmv7le
-QCC_FLAGS = -std=gnu++98 -Wall -shared -fPIC -Isrc
-LIBDIR   ?= lib
+check:
+	$(MAKE) -C tests check
 
-libEthanolApp.so: src/qnx_binding.cpp src/app_core.hpp src/blend.hpp src/fuel.hpp src/cds_keys.hpp
-	$(QCC) $(QCC_TGT) $(QCC_FLAGS) -o $@ src/qnx_binding.cpp \
-		-L$(LIBDIR) -lAppFramework -lCoreFramework
-
-.PHONY: all
-all: check libEthanolApp.so db
-
-.PHONY: clean
 clean:
-	rm -f run_tests libEthanolApp.so
+	rm -f libEthanolApp.so EthanolApp_ALL_Texts.zip EthanolApp_ALL_Images.zip
 	rm -rf data_out __pycache__
+	$(MAKE) -C tests clean

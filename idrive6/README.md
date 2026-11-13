@@ -30,77 +30,93 @@ instrument cluster reads. So the question was whether CDS carries ethanol.
 ```
 idrive6/
   src/
-    blend.hpp        fill-up math (pure, ported from the JS blend.js)   ← tested
-    fuel.hpp         ethanol/fuel value interpretation + label formatting (pure)  ← tested
-    app_core.hpp     decide live-vs-manual, run the math, format every row (pure)  ← tested
-    cds_keys.hpp     CDS property names + the ethanol candidates to probe
+    blend.hpp        fill-up math (pure, ported from the JS blend.js)              ← host-tested
+    fuel.hpp         ethanol/fuel value interpretation + label formatting (pure)   ← host-tested
+    app_core.hpp     decide live-vs-manual, run the math, format every row (pure)  ← host-tested
+    config.hpp       parse the USB settings file (ethanol %, targets) (pure)       ← host-tested
+    cds_text.hpp     narrow/utf8<->16 + numField for the CDS JSON text (pure)      ← host-tested
+    cds_keys.hpp     the CDS properties used (sensors.fuel, engine.info)
     qnx_binding.cpp  the ONLY file touching the car's frameworks (CDS → render → data model)
   tests/
-    run_tests.cpp    host tests (g++, no car) — 53 checks
-    check.hpp        tiny test harness
-  EthanolApp.xml       menu row + screen, labels bound to raDataModel
+    run_tests.cpp        pure-logic tests (72 checks)
+    app_host_test.cpp    dlopen the built .so, drive it against a fake framework, check the rows
+    fake_appframework.*  stand-in for the car's libraries (34-slot vtable), host only
+  EthanolApp.xml       menu row + screen, 7 labels bound to raDataModel 21..27
   EthanolApp.manifest  registration read by CAppManager
   Makefile             `make check` (host) / `make` (car) / `make db`
-  make_db.py           build strings + menu icon
+  make_db.py           build the text + image DB zips
 ```
 
-The pure headers (`blend/fuel/app_core`) hold all the decisions and are provable off the car. `qnx_binding.cpp`
-is a thin cable. Every place that needs a real framework detail is marked **`[RECONCILE]`** — those must be
-checked against the headers in the car's `libAppFramework`/`libCoreFramework` before the car build is trusted.
+The pure headers hold every decision and are provable off the car. `qnx_binding.cpp` is the thin cable; the
+host integration test loads the actual built library and exercises that cable against a fake framework.
 
 ## Build
 
-Off the car (do this now, needs nothing special):
+Off the car (do this now, needs only g++ and Python+Pillow):
 
 ```
-make check      # compiles and runs the host tests
-make db         # writes data_out/strings.txt + ethanol_icon.png (Pillow optional)
+make check      # pure-logic tests + the dlopen integration test
+make db         # writes EthanolApp_ALL_Texts.zip + EthanolApp_ALL_Images.zip
 ```
 
 For the car (needs the QNX toolchain + the unit's libraries):
 
-1. Install **QNX SDP 6.5** (provides `qcc`, `gcc_ntoarmv7le`).
+1. Install **QNX SDP 6.5** (provides `qcc`, `gcc_ntoarmv7le_gpp`).
 2. Copy `libAppFramework.A.so` and `libCoreFramework.A.so` off the unit (`/opt/hmi/ID5/lib`) into `./lib/`.
-3. `make` → `libEthanolApp.so`.
+3. `make` → `libEthanolApp.so`, then `make db`.
+
+## Settings file (how you set the ethanol %)
+
+NBT Evo has no easy on-screen keyboard for a plugin, so the ethanol % and fill-up targets are read from
+`nbt-ethanol.cfg` on the **same USB stick** used for logging. The app re-reads it every few seconds, so you can
+edit it and watch the rows change. Example:
+
+```
+ethanol = 72     # ethanol % now in the tank (what the BC readout shows)
+target  = 50     # desired ethanol % after the fill-up
+e85     = 85     # ethanol % of the E85 pump (summer ~83, winter ~70)
+pump    = 10     # ethanol % of the petrol pump (E10 = 10)
+tank    = 65     # tank capacity in litres (G01/F97 ~ 65)
+```
+
+The tank **level** is not set here — it comes live from CDS (`sensors.fuel`).
 
 ## Install (own car, at your own risk)
 
 Requires **root/SSH** on the head unit and **one** of the coding options `A4A`, `A4A_REMOTE_APPS`,
 `REMOTE_HMI`, or `TOUCH_COMMAND` enabled — without one, `HmiMain3D` will not load any PluginApp.
 
-1. Copy `libEthanolApp.so`, `EthanolApp.xml`, `EthanolApp.manifest`, and the packed data to
+1. Copy `libEthanolApp.so` (as `EthanolApp`), `EthanolApp.xml`, `EthanolApp.manifest`,
+   `EthanolApp_ALL_Texts.zip` and `EthanolApp_ALL_Images.zip` into
    `/opt/hmi/ID5/data/ro/Plugins/EthanolApp/` (remount read-only storage writable if needed).
-2. Hold the power button ~30 s to restart. An **Ethanol** row should appear under Media/Radio.
-3. To uninstall: delete the folder and restart.
+2. Put `nbt-ethanol.cfg` (and an empty `nbt-ethanol.log` to enable logging) on a USB stick.
+3. Hold the power button ~30 s to restart. An **ETHANOL APP** row should appear under Media/Radio.
+4. To uninstall: delete the folder and restart.
 
-Logs: `slog`, plus `nbt-ethanol.log` on the USB stick (raw CDS ethanol-candidate values — send me that file).
+Logs go to `slog` and to `nbt-ethanol.log` on the stick — send me that file after the first drive.
 
 ## Status
 
-- ✅ Pure logic (fill-up math, value decode, label/decision logic) — written and **host-tested (53 checks)**.
+- ✅ Pure logic (fill-up math, value decode, settings parse, CDS text, decisions) — **host-tested (72 checks)**.
 - ✅ CDS reality — **settled**: no live ethanol (manual entry), live tank level in litres from `sensors.fuel`.
-- 🟨 Framework binding (`qnx_binding.cpp`), XML, manifest — the first versions were modeled on the reference
-  app's README. The reference app's **actual** glue (hand-declared BMW symbols, runtime vtable patching,
-  UTF-16 CDS text, the `pluginAppInfo` export) is more involved; the faithful rewrite is **pending the
-  licensing decision below**, since that glue is derived from PolyForm-Noncommercial code and this repo is
-  public-domain.
-- ⬜ Build with `qcc` and run on a unit — needs the two framework libraries and root/SSH on the car.
+- ✅ Framework binding, XML, manifest, data build — written against the reference app's real glue and
+  **host-tested**: the integration test `dlopen`s the built `.so`, runs create → onInit → CDS subscribe →
+  live fuel → fill-up → finalize against a fake framework and checks the rows.
+- ⬜ Build with `qcc` and run on a real unit — needs the two framework libraries and root/SSH on the car.
+  (The mangled-symbol declarations, vtable offsets and XML ids still want a final check against the specific
+  firmware; the reference app itself notes it has not been run on a unit either.)
 
-## Licensing note (important)
+## Licensing
 
-The only working reference for the NBT Evo framework glue is
-[IDRIVE_GAUGE_APP](https://github.com/MGD4096/IDRIVE_GAUGE_APP) (and the NBT-AAD project it derives from),
-licensed **PolyForm-Noncommercial-1.0.0**. A faithful binding is a derivative of that work and **cannot** be
-released into the public domain like the rest of this repo. The pure logic here (`blend/fuel/app_core`) is
-original and ported from the MGU app (Unlicense); the framework binding, XML and manifest patterns are not.
-Before shipping the car build, this `idrive6/` subtree should carry PolyForm-Noncommercial + attribution
-(fine for a personal, non-commercial app), or the glue must be written clean-room. Decide before merging.
+This `idrive6/` subtree is **PolyForm-Noncommercial-1.0.0** (see `idrive6/LICENSE`) — the rest of the repo
+stays public-domain (The Unlicense). The NBT Evo framework glue, host-test harness, data build and XML/manifest
+patterns are derived from [IDRIVE_GAUGE_APP](https://github.com/MGD4096/IDRIVE_GAUGE_APP) and
+[NBT-AAD](https://github.com/Sq00ky/Supra-iDrive6-Android-Auto), both PolyForm-Noncommercial, so this subtree
+keeps a compatible license. Fine for personal use and sharing; not for sale. The pure logic
+(`blend/fuel/app_core`) is original and is also available under The Unlicense from this repo's MGU app.
 
 ## Disclaimer
 
 Use at your own risk. Installing native plugins on a head unit needs root and can crash or brick the unit —
 the reference project reports the HMI can crash. Not affiliated with or endorsed by BMW. The author is not
 responsible for anything that happens to your vehicle, head unit, or data. Never operate while driving.
-
-Released into the public domain (see repository `LICENSE`, The Unlicense). The reference gauge app and any
-BMW framework headers/libraries keep their own licenses.

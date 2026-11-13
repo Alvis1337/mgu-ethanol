@@ -1,38 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  EthanolApp.xml - the menu row and one screen for the Ethanol app on NBT Evo (iDrive 6).
-
-  Modeled on the reference gauge app's GaugeApp.xml: a PluginApp screen whose labels bind to raDataModel
-  rows that qnx_binding.cpp fills (setModelText rowId -> text). The row ids here MUST match the ids in
-  EthanolApp::refresh().
-
-  [RECONCILE] the element/attribute names (<PluginApp>, <Screen>, <Label>, binding="raDataModel.*") are
-  taken from the gauge app's README description, not a schema. Confirm against a working GaugeApp.xml before
-  trusting the exact tag names; the structure (one menu row, one screen, N bound labels) is the contract.
--->
-<PluginApp id="AlvisEthanol" title="Ethanol">
-
-  <!-- the row that appears under Media/Radio (like the gauge app's "Engine Data") -->
-  <MenuEntry id="menuEthanol" title="Ethanol" icon="ethanol_icon" screen="screenEthanol"/>
-
-  <Screen id="screenEthanol" title="Ethanol">
-
-    <Label id="lblEthanol"  caption="Ethanol"     binding="raDataModel.rowEthanol"/>
-    <Label id="lblSource"   caption="Source"      binding="raDataModel.rowSource"/>
-    <Label id="lblFuel"     caption="In tank"     binding="raDataModel.rowFuel"/>
-
-    <Separator/>
-
-    <Label id="lblAddE85"   caption="Add E85"     binding="raDataModel.rowAddE85"/>
-    <Label id="lblAddPump"  caption="Add pump"    binding="raDataModel.rowAddPump"/>
-    <Label id="lblResult"   caption="Result"      binding="raDataModel.rowResult"/>
-    <Label id="lblNote"     caption=""            binding="raDataModel.rowNote"/>
-
-    <!--
-      Settings (target %, E85 %, pump %, tank size, manual %, manual on/off) drive the fill-up math.
-      [RECONCILE] NBT Evo input widgets differ from MGU; until a stepper/selector widget is wired, these
-      live as defaults in qnx_binding.cpp State and can be edited by rebuilding. Wiring real on-screen
-      steppers is the follow-up once the base app loads on the car.
-    -->
-  </Screen>
-</PluginApp>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+     Ethanol screen for NBT Evo. Placement and structure follow MGD4096/IDRIVE_GAUGE_APP's GaugeApp.xml, which
+     follows NBT-AAD (both PolyForm-Noncommercial; see idrive6/LICENSE): a row in the Media/Radio list
+     (native state 20), after the Bluetooth audio row (focus 2270). entryButtonFocusID (32753) and
+     applicationWeight (220) differ from the gauge app (32751 / 210) and NBT-AAD (32752 / 200) so all can be
+     installed side by side. hmiState 10 holds seven labels, each bound to a raDataModel (ids 21..27);
+     libEthanolApp.so writes the text into those models with PluginApp::updateModel. Property id 2 = SELECTABLE. -->
+<pluginApps>
+  <pluginApp applicationType="Custom" applicationWeight="220" entryButtonFocusID="32753" insertAfterFocusID="2270" insertStateID="20" text="ETHANOL APP">
+    <comment/>
+    <entryButton action="5" id="1" model="3" imageModel="4">
+      <properties/>
+    </entryButton>
+    <actions>
+      <hmiAction id="5" target="10"/>
+    </actions>
+    <models>
+      <textIdModel id="3" textId="1">
+        <synonyms/>
+      </textIdModel>
+      <imageIdModel id="4" imageId="56001"/>
+      <raDataModel id="21"/>
+      <raDataModel id="22"/>
+      <raDataModel id="23"/>
+      <raDataModel id="24"/>
+      <raDataModel id="25"/>
+      <raDataModel id="26"/>
+      <raDataModel id="27"/>
+    </models>
+    <hmiStates>
+      <hmiState id="10" text="ETHANOL APP" textModel="3">
+        <components>
+          <label id="31" model="21"><properties><property id="2" value="false"/></properties></label>
+          <label id="32" model="22"><properties><property id="2" value="false"/></properties></label>
+          <label id="33" model="23"><properties><property id="2" value="false"/></properties></label>
+          <label id="34" model="24"><properties><property id="2" value="false"/></properties></label>
+          <label id="35" model="25"><properties><property id="2" value="false"/></properties></label>
+          <label id="36" model="26"><properties><property id="2" value="false"/></properties></label>
+          <label id="37" model="27"><properties><property id="2" value="false"/></properties></label>
+        </components>
+      </hmiState>
+    </hmiStates>
+  </pluginApp>
+</pluginApps>

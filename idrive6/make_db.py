@@ -1,60 +1,59 @@
 #!/usr/bin/env python3
-"""make_db.py - build the Ethanol app's text and image data for NBT Evo.
-
-The reference gauge app ships text and image "databases" built with python3 + Pillow. We do not yet know
-that exact packaging format, so this script produces the raw inputs (a strings file and a menu icon PNG)
-into data_out/ and documents what still has to be packed. [RECONCILE] the final container format against
-the gauge app's make_db.py / the files it copies to the unit.
-
-Run:  python3 make_db.py        (Pillow optional; without it the icon step is skipped with a note)
-"""
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Builds EthanolApp_ALL_Texts.zip (<lang>.txt with "id=text" lines, the format BMW's PluginsCoded apps use, as in
+# NBT-AAD) and EthanolApp_ALL_Images.zip (<imageId>.png). Needs Pillow for the icon.
+#   text 1 = menu row / screen title        image 56001 = 63x54 row icon
+# Adapted from MGD4096/IDRIVE_GAUGE_APP make_db.py (PolyForm-Noncommercial); see idrive6/LICENSE.
 import os
+import zipfile
 
-OUT = "data_out"
+from PIL import Image, ImageDraw
 
-# Caption/label strings the XML references. Kept here so translations are one edit.
-STRINGS = {
-    "app.title": "Ethanol",
-    "menu.ethanol": "Ethanol",
-    "row.ethanol": "Ethanol",
-    "row.source": "Source",
-    "row.fuel": "In tank",
-    "row.addE85": "Add E85",
-    "row.addPump": "Add pump",
-    "row.result": "Result",
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# BMW language codes, ASCII titles (like NBT-AAD's text DB).
+LANGS = {
+    "de": "Deutsch", "en-UK": "English (UK)", "en-US": "English (US)",
+    "es-ES": "Espanol", "es-US": "Espanol (US)", "fr-FR": "Francais", "fr-CA": "Francais (CA)",
+    "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski",
 }
+TITLE = "ETHANOL APP"
 
 
-def write_strings():
-    path = os.path.join(OUT, "strings.txt")
-    with open(path, "w") as f:
-        for k in sorted(STRINGS):
-            f.write("%s=%s\n" % (k, STRINGS[k]))
-    print("wrote", path)
-
-
-def write_icon():
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:
-        print("Pillow not installed; skipping icon. `pip3 install Pillow` to build ethanol_icon.png")
-        return
-    # a simple round "E" badge; replace with a real asset before shipping.
-    size = 48
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((2, 2, size - 2, size - 2), fill=(32, 160, 80, 255))
-    d.text((17, 14), "E", fill=(255, 255, 255, 255))
-    path = os.path.join(OUT, "ethanol_icon.png")
-    img.save(path)
-    print("wrote", path)
+def make_icon(path):
+    """63x54 RGBA row icon: a fuel drop with an 'E', in the near-white NBT-AAD's icons use."""
+    w, h = 63, 54
+    scale = 4
+    im = Image.new("RGBA", (w * scale, h * scale), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    ink = (250, 250, 250, 248)
+    cx = 31.5 * scale
+    # teardrop: a triangle top over a circle bottom
+    r = 15 * scale
+    cy = 33 * scale
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ink, width=3 * scale)
+    d.polygon([(cx, 6 * scale), (cx - r, cy - 2 * scale), (cx + r, cy - 2 * scale)], fill=ink)
+    # an "E" in the drop
+    ex, ey, eh, ew = cx - 6 * scale, cy - 8 * scale, 16 * scale, 11 * scale
+    lw = 3 * scale
+    d.rectangle([ex, ey, ex + lw, ey + eh], fill=ink)
+    d.rectangle([ex, ey, ex + ew, ey + lw], fill=ink)
+    d.rectangle([ex, ey + eh // 2 - lw // 2, ex + ew - 2 * scale, ey + eh // 2 + lw // 2], fill=ink)
+    d.rectangle([ex, ey + eh - lw, ex + ew, ey + eh], fill=ink)
+    im.resize((w, h), Image.LANCZOS).save(path)
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
-    write_strings()
-    write_icon()
-    print("\nNext: pack %s/ into the unit's expected DB format and copy alongside libEthanolApp.so" % OUT)
+    with zipfile.ZipFile(os.path.join(HERE, "EthanolApp_ALL_Texts.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+        for lang, langname in LANGS.items():
+            body = "100000=%s\n1=%s\n" % (langname, TITLE)
+            z.writestr(lang + ".txt", body.encode("utf-8"))
+    icon = os.path.join(HERE, "res", "row_icon_63x54.png")
+    os.makedirs(os.path.dirname(icon), exist_ok=True)
+    make_icon(icon)
+    with zipfile.ZipFile(os.path.join(HERE, "EthanolApp_ALL_Images.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(icon, "56001.png")
+    print("wrote EthanolApp_ALL_Texts.zip, EthanolApp_ALL_Images.zip")
 
 
 if __name__ == "__main__":
