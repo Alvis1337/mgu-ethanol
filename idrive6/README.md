@@ -11,17 +11,19 @@ ethanol content and a fill-up calculator (how much E85 + pump petrol to hit a ta
 Built on the structure proven by the reference native app
 [MGD4096/IDRIVE_GAUGE_APP](https://github.com/MGD4096/IDRIVE_GAUGE_APP) (QNX SDP 6.5, CDS data, PluginApp).
 
-## The one thing iDrive 6 might do that iDrive 7 could not
+## What iDrive 6 can and can't do (settled)
 
-On MGU, the head unit's internal diagnostic route **cannot reach the DME**, so live ethanol was impossible and
-the app fell back to manual entry. NBT Evo apps don't do diagnostics at all — they subscribe to the
-**Car Data Service (CDS)**, the same push feed the instrument cluster reads (`engine.*`, `sensors.fuel`, …).
+NBT Evo apps don't do diagnostics — they subscribe to the **Car Data Service (CDS)**, the same push feed the
+instrument cluster reads. So the question was whether CDS carries ethanol.
 
-**If** CDS publishes a fuel-ethanol property to plugin apps, this port reads ethanol **live**. That is an open
-question — we don't yet know the property name or whether it exists. The app subscribes to a list of
-candidate names (`src/cds_keys.hpp`) and logs whatever fires, so one tank of known E-content on the car tells
-us the answer. If nothing ever fires, manual entry is the answer (same place MGU landed) — and the fill-up
-calculator works either way.
+- **Live ethanol: no.** The authoritative [CDS property list](https://bimmergestalt.github.io/BMWConnectedAnalysis/cds/)
+  has no ethanol / flex-fuel / alcohol / fuel-quality / composition property. The only fuel-type signal,
+  `engine.info.fuelType`, is a petrol/diesel-class enum, not an E-percentage. So iDrive 6 hits the same wall
+  as MGU — now confirmed from the schema, not a silent probe. **Ethanol is entered by hand.**
+- **Live tank level: yes, and this is the win.** `sensors.fuel` reports `tanklevel` in **litres**, push-fed and
+  reliable. That is exactly what the fill-up calculator needs, and it was a fight to get on MGU. So on iDrive 6
+  the calculator runs on a real, live tank level plus a hand-entered ethanol % — arguably better than the MGU
+  version for the fill-up job.
 
 ## Layout
 
@@ -75,10 +77,24 @@ Logs: `slog`, plus `nbt-ethanol.log` on the USB stick (raw CDS ethanol-candidate
 
 ## Status
 
-- ✅ Pure logic (fill-up math, value decode, label/decision logic) — ported and **host-tested (53 checks)**.
-- 🟨 Framework binding, XML, manifest — structured against the reference app, **not yet reconciled** with the
-  car's headers or run on a unit. All such spots are marked `[RECONCILE]`.
-- ❓ Whether CDS exposes ethanol at all — **the experiment**, answered by one logged tank on the car.
+- ✅ Pure logic (fill-up math, value decode, label/decision logic) — written and **host-tested (53 checks)**.
+- ✅ CDS reality — **settled**: no live ethanol (manual entry), live tank level in litres from `sensors.fuel`.
+- 🟨 Framework binding (`qnx_binding.cpp`), XML, manifest — the first versions were modeled on the reference
+  app's README. The reference app's **actual** glue (hand-declared BMW symbols, runtime vtable patching,
+  UTF-16 CDS text, the `pluginAppInfo` export) is more involved; the faithful rewrite is **pending the
+  licensing decision below**, since that glue is derived from PolyForm-Noncommercial code and this repo is
+  public-domain.
+- ⬜ Build with `qcc` and run on a unit — needs the two framework libraries and root/SSH on the car.
+
+## Licensing note (important)
+
+The only working reference for the NBT Evo framework glue is
+[IDRIVE_GAUGE_APP](https://github.com/MGD4096/IDRIVE_GAUGE_APP) (and the NBT-AAD project it derives from),
+licensed **PolyForm-Noncommercial-1.0.0**. A faithful binding is a derivative of that work and **cannot** be
+released into the public domain like the rest of this repo. The pure logic here (`blend/fuel/app_core`) is
+original and ported from the MGU app (Unlicense); the framework binding, XML and manifest patterns are not.
+Before shipping the car build, this `idrive6/` subtree should carry PolyForm-Noncommercial + attribution
+(fine for a personal, non-commercial app), or the glue must be written clean-room. Decide before merging.
 
 ## Disclaimer
 
