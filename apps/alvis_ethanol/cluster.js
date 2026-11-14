@@ -21,6 +21,10 @@ const path = require('path');
 
 const TRIGGER = 'cluster-scan.json';
 const RESULT = 'cluster-scan-result.json';
+const STOP = 'cluster-scan-stop';
+const BATCH = 8;                      // identifiers in one request (readonly-diag allows 8)
+// F190 (the VIN: every unit has it) among seven the cluster does not have: a batch that still answers F190 works
+const CALIBRATION = [0xF190, 0xD100, 0xD101, 0xD102, 0xD103, 0xD104, 0xD105, 0xD108];
 
 // the order the identifiers are walked in: where BMW units keep live values first, the rest after
 const RANGES = [[0xF100, 0xF4FF], [0xD000, 0xDFFF], [0x4000, 0x5FFF], [0x1000, 0x1FFF], [0x0100, 0x0FFF], [0x2000, 0x3FFF], [0x6000, 0xCFFF], [0xE000, 0xF0FF], [0xF500, 0xFFFF]];
@@ -52,6 +56,14 @@ function matches(data, target, tol) {
     const seen = {}, out = [];
     readings(data).forEach((r) => { if (Math.abs(r.pct - target) <= tol && !seen[r.how]) { seen[r.how] = 1; out.push(r.how); } });
     return out;
+}
+
+/** Which of dids the positive reply 62 <DID> <data> ... holds (their two bytes appear after the service byte). */
+function present(uds, dids) {
+    return dids.filter((d) => {
+        for (let i = 1; i + 1 < uds.length; i++) if (uds[i] === ((d >> 8) & 0xFF) && uds[i + 1] === (d & 0xFF)) return true;
+        return false;
+    });
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -90,7 +102,42 @@ class ClusterScan {
         try { fs.writeFileSync(this.resultFile, JSON.stringify(body)); } catch (e) { this.log.warn('cluster scan: result not saved: ' + (e && e.message || e)); }
     }
 
-    /** Walk the ranges; every positive answer is kept, the ones that read as the target are flagged and logged. */
+    /** One request for these identifiers (1 to 8): the reply, null (no answer) or undefined (cancelled). */
+    async ask(ecu, dids) {
+        const data = [];
+        dids.forEach((d) => data.push((d >> 8) & 0xFF, d & 0xFF));
+        try {
+            return await this.link.physical(ecu, 0x22, data, this.timeoutMs,
+                (u) => (u[0] === 0x62 && dids.indexOf((u[1] << 8) | u[2]) >= 0) || (u[0] === 0x7F && u[1] === 0x22));
+        } catch (e) { return null; }
+    }
+
+    /** Does this cluster answer a batch with the identifiers it has (and refuse only when it has none)? */
+    async calibrate(ecu) {
+        const uds = await this.ask(ecu, CALIBRATION);
+        const ok = !!uds && uds[0] === 0x62 && present(uds, CALIBRATION).indexOf(0xF190) >= 0;
+        this.log.info('cluster scan: batches of ' + CALIBRATION.length + ' ' + (ok ? 'work' : 'are refused (' + (uds ? uds.map((b) => hex(b)).join(' ') : 'no answer') + '): one identifier at a time'));
+        return ok;
+    }
+
+    stopFile() { return path.join(this.dir, STOP); }
+
+    /** Keep one answered identifier, and flag it when it reads as the target. */
+    keep(did, data, target, tol) {
+        const hit = { did: hex(did, 4), data: data.map((b) => hex(b)).join(' ') };
+        this.hits.push(hit);
+        this.progress.answered++;
+        if (Number.isFinite(target)) {
+            const m = matches(data, target, tol);
+            if (m.length) { hit.reads = m; this.flagged.push(hit); this.log.info('cluster scan: ' + hit.did + ' = ' + hit.data + ' reads as ' + target + ' %: ' + m.join(', ')); }
+        }
+    }
+
+    /**
+     * Walk the ranges. With batch (the default, when the cluster passes calibrate()) 8 identifiers go in one request:
+     * the reply names the ones the cluster has, which are then read one by one for their exact data. Every positive
+     * answer is kept, the ones that read as the target are flagged and logged.
+     */
     async run(req) {
         req = req || {};
         const ecu = req.ecu != null ? req.ecu : 0x60, target = Number(req.target), tol = req.tol != null ? Number(req.tol) : 0.6;
@@ -99,41 +146,42 @@ class ClusterScan {
         this.hits = []; this.flagged = [];
         this.progress = { did: 0, asked: 0, answered: 0, refused: 0, silent: 0 };
         this.log.info('cluster scan: started, unit ' + hex(ecu) + ', target ' + target + ' %, ' + ranges.length + ' ranges');
-        let state = 'done', misses = 0, lastSave = Date.now();
+        let state = 'done', misses = 0, lastSave = Date.now(), lastLog = 0, n = 0;
         try {
+            try { fs.unlinkSync(this.stopFile()); } catch (e) { /* none */ }
+            if (typeof this.link.wake === 'function') this.link.wake(ecu);
+            const batch = req.batch === false ? false : await this.calibrate(ecu);
+            const size = batch ? BATCH : 1;
             outer:
             for (const r of ranges) {
-                for (let did = r[0]; did <= r[1]; did++) {
-                    if (this.stop) { state = 'stopped'; break outer; }
+                for (let from = r[0]; from <= r[1]; from += size) {
+                    if (this.stop || (++n % 8 === 0 && fs.existsSync(this.stopFile()))) { state = 'stopped'; break outer; }
+                    const dids = [];
+                    for (let d = from; d < from + size && d <= r[1]; d++) dids.push(d);
                     if (typeof this.link.wake === 'function') this.link.wake(ecu);
-                    let uds;
-                    const want = did;
-                    try {
-                        uds = await this.link.physical(ecu, 0x22, [(did >> 8) & 0xFF, did & 0xFF], this.timeoutMs,
-                            (u) => (u[0] === 0x62 && ((u[1] << 8) | u[2]) === want) || (u[0] === 0x7F && u[1] === 0x22));
-                    } catch (e) { uds = null; }
+                    const uds = await this.ask(ecu, dids);
                     const p = this.progress;
-                    p.did = did; p.asked++;
+                    p.did = dids[dids.length - 1]; p.asked += dids.length;
                     if (uds === undefined) { state = 'cancelled'; break outer; }
                     if (!uds) {
                         p.silent++; misses++;
-                        if (misses >= this.giveUpAfter) { state = 'cluster stopped answering at ' + hex(did, 4); break outer; }
+                        if (misses >= this.giveUpAfter) { state = 'cluster stopped answering at ' + hex(dids[0], 4); break outer; }
                         await sleep(200);
                         continue;
                     }
                     misses = 0;
-                    if (uds[0] === 0x62 && uds.length > 3) {
-                        p.answered++;
-                        const data = uds.slice(3);
-                        const hit = { did: hex(did, 4), data: data.map((b) => hex(b)).join(' ') };
-                        this.hits.push(hit);
-                        if (Number.isFinite(target)) {
-                            const m = matches(data, target, tol);
-                            if (m.length) { hit.reads = m; this.flagged.push(hit); this.log.info('cluster scan: ' + hit.did + ' = ' + hit.data + ' reads as ' + target + ' %: ' + m.join(', ')); }
+                    if (uds[0] === 0x62) {
+                        // a batch's reply only says which identifiers it holds; their exact data comes from single reads
+                        const have = dids.length === 1 ? dids : present(uds, dids);
+                        p.refused += dids.length - have.length;
+                        for (const d of have) {
+                            const one = dids.length === 1 ? uds : await this.ask(ecu, [d]);
+                            if (one && one[0] === 0x62 && one.length > 3) this.keep(d, one.slice(3), target, tol);
+                            else p.refused++;
                         }
-                    } else p.refused++;
+                    } else p.refused += dids.length;
                     if (Date.now() - lastSave > 5000) { lastSave = Date.now(); this.save('running', req); }
-                    if (p.asked % 2048 === 0) this.log.info('cluster scan: at ' + hex(did, 4) + ', ' + p.answered + ' answers, ' + this.flagged.length + ' flagged');
+                    if (p.asked - lastLog >= 2048) { lastLog = p.asked; this.log.info('cluster scan: at ' + hex(p.did, 4) + ', ' + p.answered + ' answers, ' + this.flagged.length + ' flagged'); }
                 }
             }
         } catch (e) {
@@ -147,4 +195,4 @@ class ClusterScan {
     }
 }
 
-module.exports = { ClusterScan, matches, readings, TRIGGER, RESULT, RANGES };
+module.exports = { ClusterScan, matches, readings, present, TRIGGER, RESULT, STOP, RANGES };
