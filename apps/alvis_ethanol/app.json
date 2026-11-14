@@ -2,7 +2,7 @@
   "id": "alvis_ethanol",
   "title": "Ethanol",
   "description": "Live ethanol content (E%) of the fuel, read from the engine unit: big gauge, target band, min / max and a 20 minute trend, a fill-up calculator (how much E85 and how much 93 to reach a target E%) and a debug page of read-only DME requests. Read-only.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "vendor": "custom",
   "loggingId": "OAE1",
   "iconGlyph": "E%",
@@ -21,7 +21,8 @@
     },
     "de.bmw.infotainment.vehicle.CDS": {
       "_optional": "the engine state on the Debug page",
-      "statusEngineStatus": "rs"
+      "statusEngineStatus": "rs",
+      "statusEngineSpeed2": "rs"
     },
     "de.bmw.infrastructure.VehicleCondition": {
       "_optional": "the vehicle state (parked / ignition on / ready) on the Debug page",

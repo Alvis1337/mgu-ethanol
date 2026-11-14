@@ -16,6 +16,8 @@
  * The value comes from the DME (ecu 0x12) with a read-only request (see reader.js, app.json config).
  * Without a car link the demo data runs (Settings > Demo data).
  */
+const fs = require('fs');
+const path = require('path');
 const mgu = require('./kit/mgu');
 const { withAlpha } = require('./kit/canvas');
 const G = require('./kit/gauges');
@@ -65,7 +67,8 @@ mgu.run({
         let demoMode = null;                        // whether min / max / trend hold demo or real values
         let page = ETHANOL;
         // the car's own signals (no diagnostic request): engine state, and the fuel level from the instrument cluster
-        const car = { engine: null, tankL: null, tankAt: 0, condition: null };
+        const car = { engine: null, tankL: null, tankAt: 0, condition: null, rpm: null };
+        let rpmLogAt = 0;
         ctx.signals.watch('de.bmw.infrastructure.VehicleCondition', '1', {
             VehicleCondition: (v) => {
                 const st = v && v.statusConditionVehicle;
@@ -79,6 +82,18 @@ mgu.run({
                 const e = ENGINE[st] !== undefined ? ENGINE[st] : String(st);
                 if (e !== car.engine) log.info('engine: ' + e + ' (' + st + ')');
                 car.engine = e;
+            },
+            // engine speed as the head unit receives it. While a file called rpm-watch is in the data folder every change is
+            // logged (at most 10 a second): to see whether it moves when the MHD flash shows its value on the tach (hold BC)
+            statusEngineSpeed2: (v) => {
+                const r = v && v.actualValueRPMEngineCrankshaft;
+                if (typeof r !== 'number') return;
+                const now = Date.now();
+                if (r === car.rpm || now - rpmLogAt < 100) return;
+                car.rpm = r;
+                if (!fs.existsSync(path.join(ctx.dataDir, 'rpm-watch'))) return;
+                rpmLogAt = now;
+                log.info('rpm: ' + r);
             },
         }, log).then((r) => { if (r.error) log.warn('engine signal: ' + r.error); }).catch((e) => log.warn('engine signal: ' + e));
         ctx.signals.watch('de.bmw.infotainment.KombiIF', '1', {
