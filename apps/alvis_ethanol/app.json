@@ -2,7 +2,7 @@
   "id": "alvis_ethanol",
   "title": "Ethanol",
   "description": "Live ethanol content (E%) of the fuel, read from the engine unit: big gauge, target band, min / max and a 20 minute trend, a fill-up calculator (how much E85 and how much 93 to reach a target E%) and a debug page of read-only DME requests. Read-only.",
-  "version": "0.3.3",
+  "version": "0.3.2",
   "vendor": "custom",
   "loggingId": "OAE1",
   "iconGlyph": "E%",
@@ -22,112 +22,11 @@
     "de.bmw.infotainment.vehicle.CDS": {
       "_optional": "the engine state on the Debug page",
       "statusEngineStatus": "rs",
-      "statusEngineSpeed2": "rs",
-      "datenFahrdynamiksensorErweitert": "rs",
-      "statusBattery2": "rs",
-      "statusEngineTemperature": "rs",
-      "statusGearIndicator": "rs",
-      "statusHandBrake": "rs",
-      "statusSwitchClutch2": "rs"
+      "statusEngineSpeed2": "rs"
     },
     "de.bmw.infrastructure.VehicleCondition": {
       "_optional": "the vehicle state (parked / ignition on / ready) on the Debug page",
       "VehicleCondition": "s"
-    },
-    "de.bmw.infotainment.vehicle.CDS2": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "statusBeltContacts2": "rs",
-      "statusChildSafetyLock": "rs",
-      "statusIndicate": "rs",
-      "statusInjectionVolume": "rs",
-      "statusLateralAccelerationMassCenter": "rs",
-      "statusLongitudinalAccelerationMassCenter": "rs",
-      "statusPushButtonMSA2": "rs",
-      "statusSeatOccupancy": "rs",
-      "statusYawVelocityVehicle": "rs"
-    },
-    "de.bmw.powertrain.Powertrain": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "ActualValueRPMWheel": "rs",
-      "InformationVehicleDrive": "rs",
-      "StatusCombustionEngine": "rs",
-      "StatusCombustionEngineSecure": "rs",
-      "WheelMomentDrive1": "rs",
-      "WheelMomentDrive4": "rs",
-      "dataDisplayGearboxSecure": "rs"
-    },
-    "de.bmw.powertrain.Range": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "dataRangeCalculation": "rs",
-      "dataRangeDisplay": "rs",
-      "rangeHorizonDisplay": "rs"
-    },
-    "de.bmw.powertrain.AcceleratorPedal": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "AngleAcceleratorPedal": "rs"
-    },
-    "de.bmw.infotainment.drivingexcitement.FES": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "displaySportPowertrain": "rs",
-      "efficientModeConfiguration": "rs",
-      "fesDisplay": "rs",
-      "fesDriveDynamics": "rs",
-      "fesDriveStrategy": "rs",
-      "fesInterior": "rs",
-      "fesVehicleDynamicSwitchHMI": "rs",
-      "modeAvailabilityDSC": "rs",
-      "operationPaddleSwitch": "rs",
-      "statusActualValueTorque2": "rs",
-      "statusDSCSwitchHMI": "rs",
-      "statusEDriveEVSystemState": "rs",
-      "statusElectricVehicleDriveSystemState": "rs",
-      "statusFESDisplay": "rs",
-      "statusFESDriveDynamics": "rs",
-      "statusFESDriveStrategy": "rs",
-      "statusFESInterior": "rs",
-      "statusFESVehicleDynamicSwitchHMI": "rs",
-      "statusSwitchDriveDynamicSport2": "rs",
-      "statusVehicleDynamicEngine": "rs",
-      "statusVehicleDynamicEngineMaxValue": "rs",
-      "statusVehicleDynamicEngineScaling": "rs"
-    },
-    "de.bmw.infotainment.drivingexcitement.Efficiencytainment": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "backchannelDrivingmodeDxp": "rs",
-      "drivingBehavior": "rs",
-      "operationPushButtonDSC": "rs",
-      "statusBatteryChargingState": "rs",
-      "statusDisplayHybridBenefit": "rs",
-      "statusDrivingBehavior": "rs",
-      "statusECOState1": "rs",
-      "statusPowerRelativRecuperation": "rs",
-      "statusPowerTrainSailing": "rs",
-      "statusReasonPowerUpCombustionEngine": "rs"
-    },
-    "de.bmw.infotainment.drivingexcitement.Efficiencytainment2": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "displayPowerDrive": "rs",
-      "displayPowerDrive2": "rs",
-      "socHoldConfiguration": "rs",
-      "statusAnticipatedModeHybrid": "rs",
-      "statusBatteryTemperature": "rs",
-      "statusChargeOfBatteryHybrid": "rs",
-      "statusOperatingModeHybrid": "rs",
-      "statusPowerRelativHybrid": "rs",
-      "statusPowertrainHybrid": "rs",
-      "statusSocHoldConfiguration": "rs",
-      "statusTEGState": "rs",
-      "triggerProactiveIPAOffer": "rs"
-    },
-    "de.bmw.infrastructure.VehicleInformation": {
-      "_optional": "sig-watch: logs every field while a file sig-watch is in the data folder",
-      "ChassisNumber": "rs",
-      "DataPowerTrain2": "rs",
-      "DataPowerTrain2CRC": "rs",
-      "Range": "rs",
-      "StatusReverseGear": "rs",
-      "VehicleType": "rs",
-      "statusGearboxDrive": "rs"
     },
     "de.bmw.infotainment.KombiIF": {
       "_optional": "the fuel level from the instrument cluster (the Fill-up page reads the DME or Settings instead)",

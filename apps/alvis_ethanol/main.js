@@ -37,28 +37,6 @@ const ETHANOL = 0, FILL = 1, DEBUG = 2;
 // statusEngineStatus.statusEngineRunDrive (as the upstream Live Data app reads it)
 const ENGINE = { MOTOR_AUS: 'off', MOTOR_STARTET: 'starting', MOTOR_LAEUFT: 'running', 0: 'off', 1: 'starting', 2: 'running' };
 
-/*
- * sig-watch: while a file called sig-watch is in the data folder, every change of every field listed under "signals" in
- * app.json (the engine / powertrain / drive interfaces) is appended to sig-watch.log there, one line per change (a field
- * at most once a second). To find which fields move when the MHD flash shows its value on the tach (hold BC).
- */
-function sigHandlers(ctx, iface, skip) {
-    const entry = (ctx.spec && ctx.spec.signals && ctx.spec.signals[iface]) || {}, out = {}, last = {}, at = {};
-    const file = path.join(ctx.dataDir, 'sig-watch.log'), flag = path.join(ctx.dataDir, 'sig-watch');
-    Object.keys(entry).filter((k) => k.charAt(0) !== '_' && skip.indexOf(k) < 0).forEach((name) => {
-        out[name] = (v) => {
-            let j;
-            try { j = JSON.stringify(v); } catch (e) { return; }
-            const now = Date.now();
-            if (j === last[name] || now - (at[name] || 0) < 1000) return;
-            if (!fs.existsSync(flag)) { last[name] = j; return; }
-            last[name] = j; at[name] = now;
-            try { fs.appendFileSync(file, new Date(now).toISOString().slice(11, 23) + ' ' + iface.split('.').slice(-1)[0] + '.' + name + ' ' + (j || '').slice(0, 400) + '\n'); } catch (e) { /* no room */ }
-        };
-    });
-    return out;
-}
-
 const mono = () => { const h = process.hrtime(); return h[0] * 1000 + h[1] / 1e6; };
 
 // The platform treats a crash as a fault (first crash wipes the app's data, the second uninstalls it), so every
@@ -98,7 +76,7 @@ mgu.run({
                 if (st !== undefined) car.condition = st;
             },
         }, log).then((r) => { if (r.error) log.warn('vehicle state signal: ' + r.error); }).catch((e) => log.warn('vehicle state signal: ' + e));
-        ctx.signals.watch('de.bmw.infotainment.vehicle.CDS', '1', Object.assign(sigHandlers(ctx, 'de.bmw.infotainment.vehicle.CDS', ['statusEngineStatus', 'statusEngineSpeed2']), {
+        ctx.signals.watch('de.bmw.infotainment.vehicle.CDS', '1', {
             statusEngineStatus: (v) => {
                 const st = v && v.statusEngineRunDrive;
                 const e = ENGINE[st] !== undefined ? ENGINE[st] : String(st);
@@ -117,14 +95,7 @@ mgu.run({
                 rpmLogAt = now;
                 log.info('rpm: ' + r);
             },
-        }), log).then((r) => { if (r.error) log.warn('engine signal: ' + r.error); }).catch((e) => log.warn('engine signal: ' + e));
-        ['de.bmw.infotainment.vehicle.CDS2', 'de.bmw.powertrain.Powertrain', 'de.bmw.powertrain.Range', 'de.bmw.powertrain.AcceleratorPedal',
-            'de.bmw.infotainment.drivingexcitement.FES', 'de.bmw.infotainment.drivingexcitement.Efficiencytainment',
-            'de.bmw.infotainment.drivingexcitement.Efficiencytainment2', 'de.bmw.infrastructure.VehicleInformation'].forEach((iface) => {
-            const h = sigHandlers(ctx, iface, []);
-            if (!Object.keys(h).length) return;
-            ctx.signals.watch(iface, '1', h, log).then((r) => { if (r.error) log.warn('sig-watch ' + iface + ': ' + r.error); }).catch((e) => log.warn('sig-watch ' + iface + ': ' + e));
-        });
+        }, log).then((r) => { if (r.error) log.warn('engine signal: ' + r.error); }).catch((e) => log.warn('engine signal: ' + e));
         ctx.signals.watch('de.bmw.infotainment.KombiIF', '1', {
             statusRangeTankStatus: (v) => {
                 const l = v && v.fluidLevelFuelTank;
